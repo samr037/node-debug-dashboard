@@ -1,12 +1,24 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.routers import hardware, network, node, overview, storage, system, warnings
+from app.routers import (
+    containers,
+    hardware,
+    kubernetes,
+    network,
+    node,
+    overview,
+    processes,
+    storage,
+    system,
+    talos,
+    warnings,
+)
 
 app = FastAPI(
     title="Node Debug Dashboard",
     description="Hardware monitoring and diagnostics API for Talos Linux Kubernetes nodes",
-    version="1.0.0",
+    version="2.0.0",
 )
 
 # API routers
@@ -15,6 +27,10 @@ app.include_router(hardware.router, prefix="/api/hardware")
 app.include_router(storage.router, prefix="/api/storage")
 app.include_router(network.router, prefix="/api/network")
 app.include_router(system.router, prefix="/api/system")
+app.include_router(kubernetes.router, prefix="/api/kubernetes")
+app.include_router(talos.router, prefix="/api/talos")
+app.include_router(containers.router, prefix="/api/containers")
+app.include_router(processes.router, prefix="/api/processes")
 app.include_router(warnings.router, prefix="/api")
 app.include_router(overview.router, prefix="/api")
 

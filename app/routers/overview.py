@@ -1,14 +1,18 @@
 from fastapi import APIRouter
 
+from app.collectors.containers import collect_containers
 from app.collectors.cpu import collect_cpu
 from app.collectors.efi import collect_efi
 from app.collectors.gpu import collect_gpus
+from app.collectors.kubernetes import collect_kubernetes
 from app.collectors.memory import collect_memory
 from app.collectors.network import collect_connectivity, collect_nics
 from app.collectors.node import collect_node_info
 from app.collectors.pci import collect_pci
+from app.collectors.processes import collect_processes
 from app.collectors.sensors import collect_sensors
 from app.collectors.storage import collect_storage
+from app.collectors.talos import collect_talos
 from app.collectors.usb import collect_usb
 from app.routers.warnings import get_warnings
 
@@ -29,6 +33,10 @@ async def get_overview():
     storage = await collect_storage()
     efi = await collect_efi()
     connectivity = await collect_connectivity()
+    k8s = await collect_kubernetes()
+    talos_info = await collect_talos()
+    containers_info = await collect_containers()
+    processes_info = await collect_processes()
     warnings = await get_warnings()
 
     return {
@@ -50,5 +58,9 @@ async def get_overview():
             "interfaces": [n.model_dump() for n in nics],
             "connectivity": connectivity,
         },
+        "kubernetes": k8s.model_dump(),
+        "talos": talos_info.model_dump(),
+        "containers": containers_info.model_dump(),
+        "processes": processes_info.model_dump(),
         "warnings": [w.model_dump() for w in warnings],
     }
