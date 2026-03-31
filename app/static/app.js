@@ -69,6 +69,10 @@ function render(data) {
     renderStorage(data.storage);
     renderSystem(data.system);
     renderNetwork(data.network);
+    renderKubernetes(data.kubernetes);
+    renderTalos(data.talos);
+    renderContainers(data.containers);
+    renderProcesses(data.processes);
     document.getElementById('header-node').textContent = data.node.hostname;
     if (!isFirstRender) {
         restoreOpenState(openState);
@@ -385,8 +389,273 @@ function subSection(id, title, content) {
     return `<details data-id="${esc(id)}" class="sub-section"><summary>${esc(title)}</summary><div class="section-content">${content}</div></details>`;
 }
 
+function severityBadge(severity, text) {
+    return `<span class="sev-${severity}">${text}</span>`;
+}
+
+function humanBytes(bytes) {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    let val = bytes;
+    while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
+    return `${val.toFixed(1)} ${units[i]}`;
+}
+
+// ── Kubernetes ──
+function renderKubernetes(k8s) {
+    const el = document.getElementById('kubernetes-section');
+    if (!k8s) { el.innerHTML = ''; return; }
+    let html = '<details data-id="kubernetes"><summary>Kubernetes</summary><div class="section-content">';
+
+    // Node Info
+    const ni = k8s.node_info;
+    let nodeHtml = `<div class="kv-grid">
+        <span class="kv-key">Kubelet</span><span class="kv-val">${esc(ni.kubelet_version)}</span>
+        <span class="kv-key">Runtime</span><span class="kv-val">${esc(ni.container_runtime)}</span>
+        <span class="kv-key">OS Image</span><span class="kv-val">${esc(ni.os_image)}</span>
+        <span class="kv-key">Arch</span><span class="kv-val">${esc(ni.architecture)}</span>
+    </div>`;
+
+    // Labels
+    if (Object.keys(ni.labels).length) {
+        nodeHtml += '<div style="margin-top:8px;font-weight:500;color:var(--text-bright)">Labels</div>';
+        nodeHtml += table(['Key', 'Value'],
+            Object.entries(ni.labels).map(([k, v]) => [k, v])
+        );
+    }
+
+    // Conditions
+    if (ni.conditions.length) {
+        nodeHtml += '<div style="margin-top:8px;font-weight:500;color:var(--text-bright)">Conditions</div>';
+        nodeHtml += table(['Type', 'Status', 'Reason', 'Last Transition'],
+            ni.conditions.map(c => {
+                const ok = (c.type === 'Ready' && c.status === 'True') || (c.type !== 'Ready' && c.status === 'False');
+                return [c.type, severityBadge(ok ? 'ok' : 'critical', c.status), c.reason, c.last_transition];
+            })
+        );
+    }
+
+    // Resources
+    if (ni.capacity.cpu || ni.allocatable.cpu) {
+        nodeHtml += '<div style="margin-top:8px;font-weight:500;color:var(--text-bright)">Resources</div>';
+        nodeHtml += table(['Resource', 'Capacity', 'Allocatable'],
+            [
+                ['CPU', ni.capacity.cpu, ni.allocatable.cpu],
+                ['Memory', ni.capacity.memory, ni.allocatable.memory],
+                ['Pods', ni.capacity.pods, ni.allocatable.pods],
+                ni.capacity.gpu_nvidia ? ['GPU (NVIDIA)', ni.capacity.gpu_nvidia, ni.allocatable.gpu_nvidia] : null,
+            ].filter(Boolean)
+        );
+    }
+
+    html += subSection('k8s-node', 'Node Info', nodeHtml);
+
+    // API Endpoint
+    if (k8s.api_endpoint.url) {
+        html += `<div style="padding:6px 12px;font-size:12px;color:var(--text-dim)">
+            API: ${esc(k8s.api_endpoint.url)} — ${severityBadge(k8s.api_endpoint.healthy ? 'ok' : 'critical', k8s.api_endpoint.healthy ? 'Healthy' : 'Unhealthy')}
+        </div>`;
+    }
+
+    // Certificates
+    if (k8s.certificates.length) {
+        html += subSection('k8s-certs', 'Certificates', table(
+            ['File', 'Subject', 'Issuer', 'Not After', 'Expires In', 'Fingerprint'],
+            k8s.certificates.map(c => [
+                c.file_path.split('/').pop(),
+                esc(c.subject), esc(c.issuer), esc(c.not_after),
+                severityBadge(c.expiry_severity, (c.days_until_expiry != null ? c.days_until_expiry + 'd' : '-')),
+                `<span style="font-size:10px;color:var(--text-dim)">${esc((c.sha256_fingerprint || '').substring(0, 24))}...</span>`
+            ])
+        ));
+    }
+
+    // Components
+    if (k8s.components.length) {
+        html += subSection('k8s-components', 'Components', table(
+            ['Name', 'Running', 'Health', 'Uptime'],
+            k8s.components.map(c => [
+                c.name,
+                c.running ? severityBadge('ok', 'Yes') : severityBadge('critical', 'No'),
+                severityBadge(c.health_status === 'Healthy' ? 'ok' : c.health_status === 'Unknown' ? '' : 'critical', c.health_status),
+                c.uptime || '-'
+            ])
+        ));
+    }
+
+    html += '</div></details>';
+    el.innerHTML = html;
+}
+
+// ── Talos ──
+function renderTalos(talos) {
+    const el = document.getElementById('talos-section');
+    if (!talos) { el.innerHTML = ''; return; }
+    let html = '<details data-id="talos"><summary>Talos</summary><div class="section-content">';
+
+    // Version
+    let versionHtml = `<div class="kv-grid">
+        <span class="kv-key">Version</span><span class="kv-val">${esc(talos.version.version)}</span>
+        ${talos.version.schematic_id ? `<span class="kv-key">Schematic</span><span class="kv-val">${esc(talos.version.schematic_id)}</span>` : ''}
+    </div>`;
+
+    // Machine config
+    const mc = talos.machine_config;
+    if (mc.config_available) {
+        versionHtml += `<div class="kv-grid" style="margin-top:8px">
+            <span class="kv-key">Type</span><span class="kv-val">${esc(mc.machine_type)}</span>
+            <span class="kv-key">Install Disk</span><span class="kv-val">${esc(mc.install_disk)}</span>
+            <span class="kv-key">Install Image</span><span class="kv-val" style="word-break:break-all">${esc(mc.install_image)}</span>
+            <span class="kv-key">Cluster</span><span class="kv-val">${esc(mc.cluster_name)}</span>
+            <span class="kv-key">Endpoint</span><span class="kv-val">${esc(mc.cluster_endpoint)}</span>
+        </div>`;
+
+        if (mc.extensions.length) {
+            versionHtml += '<div style="margin-top:8px;font-weight:500;color:var(--text-bright)">Extensions</div>';
+            versionHtml += '<div style="padding:4px 0">' + mc.extensions.map(e => `<span style="background:var(--bg);padding:2px 6px;border-radius:3px;margin:2px;display:inline-block;font-size:11px">${esc(e)}</span>`).join('') + '</div>';
+        }
+
+        if (mc.network_interfaces.length) {
+            versionHtml += '<div style="margin-top:8px;font-weight:500;color:var(--text-bright)">Network Interfaces</div>';
+            versionHtml += table(['Name', 'Addresses', 'DHCP', 'Routes'],
+                mc.network_interfaces.map(i => [
+                    i.name, i.addresses.join(', ') || '-',
+                    i.dhcp ? 'Yes' : 'No',
+                    i.routes.length ? i.routes.join(', ') : '-'
+                ])
+            );
+        }
+    } else {
+        versionHtml += `<div style="color:var(--text-dim);padding:8px 0">${esc(mc.error || 'Config not available')}</div>`;
+    }
+    html += subSection('talos-config', 'Machine Config', versionHtml);
+
+    // Certificates
+    if (talos.certificates.length) {
+        html += subSection('talos-certs', 'Certificates', table(
+            ['Name', 'Subject', 'Issuer', 'Not After', 'Expires In', 'Fingerprint'],
+            talos.certificates.map(c => [
+                esc(c.name), esc(c.subject), esc(c.issuer), esc(c.not_after),
+                severityBadge(c.expiry_severity, (c.days_until_expiry != null ? c.days_until_expiry + 'd' : '-')),
+                `<span style="font-size:10px;color:var(--text-dim)">${esc((c.sha256_fingerprint || '').substring(0, 24))}...</span>`
+            ])
+        ));
+    }
+
+    html += '</div></details>';
+    el.innerHTML = html;
+}
+
+// ── Containers ──
+function renderContainers(ct) {
+    const el = document.getElementById('containers-section');
+    if (!ct) { el.innerHTML = ''; return; }
+    let html = '<details data-id="containers"><summary>Containers</summary><div class="section-content">';
+
+    // System containers
+    if (ct.system_containers.length) {
+        html += subSection('ct-system', 'Talos System Services', table(
+            ['Name', 'State', 'Memory', 'Image', 'Uptime', 'Logs'],
+            ct.system_containers.map(c => [
+                c.name,
+                c.state === 'CONTAINER_RUNNING' ? severityBadge('ok', 'Running') : severityBadge('critical', c.state),
+                c.stats.memory_human || '-',
+                `<span style="font-size:11px;color:var(--text-dim)">${esc((c.image || '').split('/').pop())}</span>`,
+                c.uptime || '-',
+                c.container_id ? `<button class="log-btn" onclick="openLogViewer('${esc(c.container_id)}','${esc(c.name)}')">Logs</button>` : '-'
+            ])
+        ));
+    }
+
+    // Workload containers
+    if (ct.workload_containers.length) {
+        html += subSection('ct-workloads', 'Workload Pods', table(
+            ['Namespace', 'Pod', 'Container', 'State', 'Memory', 'Uptime', 'Logs'],
+            ct.workload_containers.map(c => [
+                c.namespace,
+                c.pod_name,
+                c.container_name,
+                c.state === 'CONTAINER_RUNNING' ? severityBadge('ok', 'Running') : severityBadge('critical', c.state),
+                c.stats.memory_human || '-',
+                c.uptime || '-',
+                c.container_id ? `<button class="log-btn" onclick="openLogViewer('${esc(c.container_id)}','${esc(c.namespace + '/' + c.pod_name + '/' + c.container_name)}')">Logs</button>` : '-'
+            ])
+        ));
+    }
+
+    html += '</div></details>';
+    el.innerHTML = html;
+}
+
+// ── Processes ──
+function renderProcesses(procs) {
+    const el = document.getElementById('processes-section');
+    if (!procs) { el.innerHTML = ''; return; }
+    let html = '<details data-id="processes"><summary>Processes (' + procs.total_count + ')</summary><div class="section-content">';
+
+    html += table(
+        ['PID', 'PPID', 'User', 'CPU%', 'MEM%', 'RSS', 'State', 'Command'],
+        procs.processes.map(p => [
+            p.pid, p.ppid, esc(p.user),
+            p.cpu_percent.toFixed(1),
+            p.mem_percent.toFixed(1),
+            humanBytes(p.rss_kb * 1024),
+            p.state,
+            `<span style="font-size:11px;max-width:400px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.command)}</span>`
+        ])
+    );
+
+    html += '</div></details>';
+    el.innerHTML = html;
+}
+
+// ── WebSocket Log Viewer ──
+let logSocket = null;
+
+function openLogViewer(containerId, containerName) {
+    const modal = document.getElementById('log-modal');
+    const content = document.getElementById('log-modal-content');
+    const title = document.getElementById('log-modal-title');
+
+    modal.classList.remove('hidden');
+    title.textContent = 'Logs: ' + containerName;
+    content.textContent = 'Connecting...\n';
+
+    if (logSocket) { logSocket.close(); logSocket = null; }
+
+    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    logSocket = new WebSocket(wsProtocol + '//' + location.host + '/api/containers/' + containerId + '/logs');
+
+    logSocket.onopen = () => {
+        content.textContent = '';
+    };
+
+    logSocket.onmessage = (event) => {
+        content.textContent += event.data;
+        // Auto-scroll if near bottom
+        if (content.scrollHeight - content.scrollTop - content.clientHeight < 100) {
+            content.scrollTop = content.scrollHeight;
+        }
+    };
+
+    logSocket.onerror = () => {
+        content.textContent += '\n[WebSocket error]\n';
+    };
+
+    logSocket.onclose = () => {
+        content.textContent += '\n[Connection closed]\n';
+    };
+}
+
+function closeLogViewer() {
+    document.getElementById('log-modal').classList.add('hidden');
+    if (logSocket) { logSocket.close(); logSocket = null; }
+}
+
 // ── Init ──
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('refresh-btn').addEventListener('click', fetchOverview);
+    document.getElementById('log-modal-close')?.addEventListener('click', closeLogViewer);
     fetchOverview();
 });

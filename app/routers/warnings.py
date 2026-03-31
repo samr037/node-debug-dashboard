@@ -1,10 +1,12 @@
 from fastapi import APIRouter
 
 from app.collectors.dmesg import collect_dmesg_warnings
+from app.collectors.kubernetes import collect_k8s_certificates, collect_k8s_node_info
 from app.collectors.memory import collect_memory
 from app.collectors.network import collect_nics
 from app.collectors.sensors import collect_sensors
 from app.collectors.storage import collect_all_smart, collect_disk_usage
+from app.collectors.talos import collect_talos_certificates
 from app.models.warnings import Warning
 
 router = APIRouter(tags=["warnings"])
@@ -123,6 +125,51 @@ async def get_warnings():
                     source="disk",
                     message=f"{usage.mount}: {usage.used_percent}% used ({usage.used}/{usage.size})",
                     device=usage.filesystem,
+                )
+            )
+
+    # Certificate expiry warnings (K8s)
+    for cert in await collect_k8s_certificates():
+        if cert.expiry_severity != "ok":
+            warnings.append(
+                Warning(
+                    severity=cert.expiry_severity,
+                    source="certificate",
+                    message=f"K8s cert expires in {cert.days_until_expiry}d: {cert.file_path.split('/')[-1]}",
+                )
+            )
+
+    # Certificate expiry warnings (Talos)
+    for cert in await collect_talos_certificates():
+        if cert.expiry_severity != "ok":
+            warnings.append(
+                Warning(
+                    severity=cert.expiry_severity,
+                    source="certificate",
+                    message=f"Talos cert expires in {cert.days_until_expiry}d: {cert.name}",
+                )
+            )
+
+    # K8s node condition warnings
+    k8s_node = await collect_k8s_node_info()
+    for cond in k8s_node.conditions:
+        if cond.type == "Ready" and cond.status != "True":
+            warnings.append(
+                Warning(
+                    severity="critical",
+                    source="kubernetes",
+                    message=f"Node not Ready: {cond.message}",
+                )
+            )
+        elif (
+            cond.type in ("MemoryPressure", "DiskPressure", "PIDPressure")
+            and cond.status == "True"
+        ):
+            warnings.append(
+                Warning(
+                    severity="warning",
+                    source="kubernetes",
+                    message=f"{cond.type}: {cond.message}",
                 )
             )
 
