@@ -7,6 +7,7 @@ from app.collectors.base import read_file, run_command, ttl_cache
 from app.config import HOST_ROOT
 from app.models.kubernetes import (
     CertificateInfo,
+    ClusterNode,
     K8sApiEndpoint,
     K8sComponentStatus,
     K8sNodeAddress,
@@ -261,6 +262,78 @@ async def collect_k8s_api_endpoint() -> K8sApiEndpoint:
 
 
 @ttl_cache()
+async def collect_cluster_nodes() -> list[ClusterNode]:
+    """List all nodes in the cluster with name, IP, role, and readiness."""
+    token = (
+        await read_file("/var/run/secrets/kubernetes.io/serviceaccount/token")
+    ).strip()
+    if not token:
+        return []
+
+    ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    stdout, _, rc = await run_command(
+        [
+            "curl",
+            "-s",
+            "--cacert",
+            ca_path,
+            "-H",
+            f"Authorization: Bearer {token}",
+            "https://kubernetes.default.svc/api/v1/nodes",
+        ]
+    )
+    if rc != 0 or not stdout.strip():
+        return []
+
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError:
+        return []
+
+    current_node = os.environ.get("KUBERNETES_NODE_NAME", "")
+    nodes: list[ClusterNode] = []
+
+    for item in data.get("items", []):
+        metadata = item.get("metadata", {})
+        status = item.get("status", {})
+        labels = metadata.get("labels", {})
+        name = metadata.get("name", "")
+
+        # Get InternalIP
+        ip = ""
+        for addr in status.get("addresses", []):
+            if addr.get("type") == "InternalIP":
+                ip = addr.get("address", "")
+                break
+
+        # Determine role
+        role = (
+            "control-plane"
+            if "node-role.kubernetes.io/control-plane" in labels
+            else "worker"
+        )
+
+        # Check readiness
+        ready = False
+        for cond in status.get("conditions", []):
+            if cond.get("type") == "Ready" and cond.get("status") == "True":
+                ready = True
+                break
+
+        nodes.append(
+            ClusterNode(
+                name=name,
+                ip=ip,
+                role=role,
+                ready=ready,
+                current=(name == current_node),
+            )
+        )
+
+    return sorted(nodes, key=lambda n: (n.role != "control-plane", n.name))
+
+
+@ttl_cache()
 async def collect_kubernetes() -> KubernetesOverview:
     """Aggregate all Kubernetes collectors into a single overview."""
     return KubernetesOverview(
@@ -268,4 +341,5 @@ async def collect_kubernetes() -> KubernetesOverview:
         certificates=await collect_k8s_certificates(),
         api_endpoint=await collect_k8s_api_endpoint(),
         components=await collect_k8s_components(),
+        cluster_nodes=await collect_cluster_nodes(),
     )

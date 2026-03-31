@@ -84,6 +84,7 @@ let isFirstRender = true;
 
 function render(data) {
     const openState = isFirstRender ? {} : saveOpenState();
+    renderClusterBar(data.kubernetes?.cluster_nodes || []);
     renderNodeBar(data.node, data.hardware);
     renderWarnings(data.warnings);
     renderHardware(data.hardware);
@@ -101,6 +102,21 @@ function render(data) {
         restoreOpenState(openState);
     }
     isFirstRender = false;
+}
+
+// ── Cluster Node Bar ──
+function renderClusterBar(nodes) {
+    const el = document.getElementById('cluster-bar');
+    if (!nodes || !nodes.length) { el.innerHTML = ''; return; }
+    el.innerHTML = nodes.map(n => {
+        const cls = ['cluster-node'];
+        if (n.current) cls.push('current');
+        if (!n.ready) cls.push('offline');
+        const roleTag = n.role === 'control-plane' ? '<span class="cn-role cn-cp">CP</span>' : '<span class="cn-role cn-wk">W</span>';
+        const link = n.current ? '#' : `http://${n.ip}/`;
+        const readyDot = n.ready ? '<span class="cn-dot cn-ready"></span>' : '<span class="cn-dot cn-notready"></span>';
+        return `<a href="${link}" class="${cls.join(' ')}" title="${esc(n.name)} (${n.ip})">${readyDot}${roleTag}<span class="cn-name">${esc(n.name)}</span><span class="cn-ip">${esc(n.ip)}</span></a>`;
+    }).join('');
 }
 
 // ── Node Info Bar ──
