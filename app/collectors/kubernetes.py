@@ -113,6 +113,7 @@ async def collect_k8s_certificates() -> list[CertificateInfo]:
     pki_dirs = [
         f"{HOST_ROOT}/etc/kubernetes/pki/",
         f"{HOST_ROOT}/etc/kubernetes/pki/etcd/",
+        f"{HOST_ROOT}/system/secrets/etcd/",
     ]
 
     cert_files: list[str] = []
@@ -198,9 +199,10 @@ async def collect_k8s_certificates() -> list[CertificateInfo]:
 @ttl_cache(seconds=300)
 async def _collect_etcd_status() -> EtcdStatus:
     """Get detailed etcd metrics via the etcd API."""
-    ca = f"{HOST_ROOT}/etc/kubernetes/pki/etcd/ca.crt"
-    cert = f"{HOST_ROOT}/etc/kubernetes/pki/etcd/server.crt"
-    key = f"{HOST_ROOT}/etc/kubernetes/pki/etcd/server.key"
+    # Talos stores etcd certs in /system/secrets/etcd/
+    ca = f"{HOST_ROOT}/system/secrets/etcd/ca.crt"
+    cert = f"{HOST_ROOT}/system/secrets/etcd/admin.crt"
+    key = f"{HOST_ROOT}/system/secrets/etcd/admin.key"
     base_curl = [
         "curl",
         "-s",
@@ -271,9 +273,30 @@ async def collect_k8s_components() -> list[K8sComponentStatus]:
         "kube-proxy": "http://localhost:10249/healthz",
     }
 
+    # etcd needs client certs on Talos
+    etcd_ca = f"{HOST_ROOT}/system/secrets/etcd/ca.crt"
+    etcd_cert = f"{HOST_ROOT}/system/secrets/etcd/admin.crt"
+    etcd_key = f"{HOST_ROOT}/system/secrets/etcd/admin.key"
+
     results: list[K8sComponentStatus] = []
     for name, url in components.items():
-        stdout, _, rc = await run_command(["curl", "-sk", "--max-time", "2", url])
+        if name == "etcd":
+            cmd = [
+                "curl",
+                "-s",
+                "--max-time",
+                "2",
+                "--cacert",
+                etcd_ca,
+                "--cert",
+                etcd_cert,
+                "--key",
+                etcd_key,
+                url,
+            ]
+        else:
+            cmd = ["curl", "-sk", "--max-time", "2", url]
+        stdout, _, rc = await run_command(cmd)
 
         if rc != 0 or not stdout.strip():
             health_status = "Unknown"
