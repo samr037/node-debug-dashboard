@@ -30,7 +30,7 @@ build-and-push:
         TAG="${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}"
       fi
     - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf '%s:%s' "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64)\"}}}" > /kaniko/.docker/config.json
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf '%s:%s' "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 -w0)\"}}}" > /kaniko/.docker/config.json
     - >
       /kaniko/executor
       --context "${CI_PROJECT_DIR}"
