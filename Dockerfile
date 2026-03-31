@@ -28,6 +28,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# CRI tools (crictl) for container inspection
+ARG CRICTL_VERSION=v1.32.0
+RUN curl -fsSL "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-amd64.tar.gz" \
+    | tar -xz -C /usr/local/bin crictl \
+    && chmod +x /usr/local/bin crictl
+
 # Python application
 WORKDIR /opt/node-dashboard
 

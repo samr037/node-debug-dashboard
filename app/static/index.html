@@ -30,6 +30,19 @@
         <div id="storage-section"></div>
         <div id="system-section"></div>
         <div id="network-section"></div>
+        <div id="kubernetes-section"></div>
+        <div id="talos-section"></div>
+        <div id="containers-section"></div>
+        <div id="processes-section"></div>
+    </div>
+
+    <!-- Log viewer modal (outside .main so auto-refresh doesn't destroy it) -->
+    <div id="log-modal" class="log-modal hidden">
+        <div class="log-modal-header">
+            <span id="log-modal-title">Container Logs</span>
+            <button id="log-modal-close" class="refresh-btn">Close</button>
+        </div>
+        <pre id="log-modal-content" class="log-content"></pre>
     </div>
 
     <div class="footer">
