@@ -238,6 +238,33 @@ body {
 .cn-name { font-weight: 500; }
 .cn-ip { color: var(--text-dim); margin-left: auto; }
 
+/* SSH badges */
+.ssh-badge {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--green);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+}
+.ssh-badge:hover { background: rgba(63, 185, 80, 0.3); }
+
+.ssh-badge-sm {
+    font-size: 8px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 2px;
+    background: rgba(63, 185, 80, 0.1);
+    color: var(--green);
+    cursor: pointer;
+    user-select: none;
+    flex-shrink: 0;
+}
+.ssh-badge-sm:hover { background: rgba(63, 185, 80, 0.25); }
+
 /* Role badge */
 .role-badge {
     font-size: 10px;
