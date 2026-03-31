@@ -84,7 +84,7 @@ let isFirstRender = true;
 
 function render(data) {
     const openState = isFirstRender ? {} : saveOpenState();
-    renderNodeBar(data.node);
+    renderNodeBar(data.node, data.hardware);
     renderWarnings(data.warnings);
     renderHardware(data.hardware);
     renderStorage(data.storage);
@@ -94,7 +94,9 @@ function render(data) {
     renderTalos(data.talos);
     renderContainers(data.containers);
     renderProcesses(data.processes);
-    document.getElementById('header-node').textContent = data.node.hostname;
+    // Show hostname + role badge in header
+    const role = data.kubernetes?.node_info?.labels?.['node-role.kubernetes.io/control-plane'] !== undefined ? 'control-plane' : 'worker';
+    document.getElementById('header-node').innerHTML = `${esc(data.node.hostname)} <span class="role-badge ${role === 'control-plane' ? 'role-cp' : 'role-worker'}">${role}</span>`;
     if (!isFirstRender) {
         restoreOpenState(openState);
     }
@@ -102,19 +104,39 @@ function render(data) {
 }
 
 // ── Node Info Bar ──
-function renderNodeBar(node) {
+function gauge(label, percent, valueText) {
+    const color = percent > 90 ? 'var(--red)' : percent > 70 ? 'var(--yellow)' : 'var(--green)';
+    return `<div class="gauge">
+        <div class="gauge-label">${label}</div>
+        <div class="gauge-bar"><div class="gauge-fill" style="width:${Math.min(percent, 100)}%;background:${color}"></div></div>
+        <div class="gauge-value">${valueText}</div>
+    </div>`;
+}
+
+function renderNodeBar(node, hardware) {
     const el = document.getElementById('node-bar');
+    // CPU usage from load average vs cores
+    const cpuPercent = Math.round((node.load_1m / node.cpu_threads) * 100);
+    // RAM usage from hardware memory
+    const mem = hardware?.memory;
+    const ramPercent = mem ? Math.round(mem.used_percent) : 0;
+    const ramUsed = mem ? (mem.total_gb - mem.available_gb).toFixed(1) : '?';
+
     el.innerHTML = `
-        <div class="item"><span class="label">OS:</span><span class="value">${esc(node.os_name)}</span></div>
-        ${node.talos_version ? `<div class="item"><span class="label">Talos:</span><span class="value">${esc(node.talos_version)}</span></div>` : ''}
-        <div class="item"><span class="label">Kernel:</span><span class="value">${esc(node.kernel_version)}</span></div>
-        <div class="item"><span class="label">Up:</span><span class="value">${esc(node.uptime_human)}</span></div>
-        <div class="item"><span class="label">Load:</span><span class="value">${node.load_1m} ${node.load_5m} ${node.load_15m}</span></div>
-        <div class="item"><span class="label">CPU:</span><span class="value">${esc(node.cpu_model)} (${node.cpu_cores}c/${node.cpu_threads}t)</span></div>
-        <div class="item"><span class="label">RAM:</span><span class="value">${node.ram_total_gb} GB</span></div>
-        ${node.ip_addresses.filter(ip => ip.family === 'inet').map(ip =>
-            `<div class="item"><span class="label">${esc(ip.interface)}:</span><span class="value">${esc(ip.address)}/${ip.prefix_length}</span></div>`
-        ).join('')}
+        <div class="node-bar-info">
+            <div class="item"><span class="label">OS:</span><span class="value">${esc(node.os_name)}</span></div>
+            ${node.talos_version ? `<div class="item"><span class="label">Talos:</span><span class="value">${esc(node.talos_version)}</span></div>` : ''}
+            <div class="item"><span class="label">Kernel:</span><span class="value">${esc(node.kernel_version)}</span></div>
+            <div class="item"><span class="label">Up:</span><span class="value">${esc(node.uptime_human)}</span></div>
+            <div class="item"><span class="label">CPU:</span><span class="value">${esc(node.cpu_model)} (${node.cpu_cores}c/${node.cpu_threads}t)</span></div>
+            ${node.ip_addresses.filter(ip => ip.family === 'inet').map(ip =>
+                `<div class="item"><span class="label">${esc(ip.interface)}:</span><span class="value">${esc(ip.address)}/${ip.prefix_length}</span></div>`
+            ).join('')}
+        </div>
+        <div class="node-bar-gauges">
+            ${gauge('CPU', cpuPercent, `${cpuPercent}% (load ${node.load_1m})`)}
+            ${gauge('RAM', ramPercent, `${ramUsed}/${node.ram_total_gb} GB (${ramPercent}%)`)}
+        </div>
     `;
 }
 

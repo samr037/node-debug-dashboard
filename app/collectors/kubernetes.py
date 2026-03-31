@@ -196,7 +196,7 @@ async def collect_k8s_certificates() -> list[CertificateInfo]:
 async def collect_k8s_components() -> list[K8sComponentStatus]:
     """Probe health endpoints for core Kubernetes components."""
     components = {
-        "kubelet": "https://localhost:10250/healthz",
+        "kubelet": "http://localhost:10248/healthz",
         "kube-apiserver": "https://localhost:6443/healthz",
         "kube-scheduler": "https://localhost:10259/healthz",
         "kube-controller-manager": "https://localhost:10257/healthz",
@@ -238,9 +238,20 @@ async def collect_k8s_api_endpoint() -> K8sApiEndpoint:
     if not host:
         return K8sApiEndpoint()
 
+    token = (
+        await read_file("/var/run/secrets/kubernetes.io/serviceaccount/token")
+    ).strip()
+    ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
     url = f"https://{host}:{port}/healthz"
-    stdout, _, rc = await run_command(["curl", "-sk", "--max-time", "2", url])
 
+    cmd = ["curl", "-s", "--max-time", "2", "--cacert", ca_path]
+    if token:
+        cmd.extend(["-H", f"Authorization: Bearer {token}"])
+    else:
+        cmd.append("-k")
+    cmd.append(url)
+
+    stdout, _, rc = await run_command(cmd)
     healthy = rc == 0 and "ok" in stdout.lower()
 
     return K8sApiEndpoint(
