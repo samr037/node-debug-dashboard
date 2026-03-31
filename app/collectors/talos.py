@@ -14,7 +14,7 @@ from app.models.talos import (
 )
 
 
-@ttl_cache()
+@ttl_cache(seconds=300)
 async def collect_talos_version() -> TalosVersionInfo:
     # Read from os-release (always available on Talos)
     os_release = await read_file(f"{HOST_ROOT}/etc/os-release")
@@ -54,7 +54,7 @@ async def collect_talos_version() -> TalosVersionInfo:
     return TalosVersionInfo(version=version, schematic_id=schematic_id)
 
 
-@ttl_cache()
+@ttl_cache(seconds=300)
 async def collect_talos_machine_config() -> TalosMachineConfig:
     """Extract Talos machine info from host filesystem and K8s API.
 
@@ -166,7 +166,7 @@ async def collect_talos_machine_config() -> TalosMachineConfig:
     )
 
 
-@ttl_cache()
+@ttl_cache(seconds=300)
 async def collect_talos_certificates() -> list[TalosCertificateInfo]:
     # Search for certs in K8s PKI (Talos manages these)
     search_patterns = [
@@ -255,7 +255,7 @@ async def collect_talos_certificates() -> list[TalosCertificateInfo]:
     return certs
 
 
-@ttl_cache()
+@ttl_cache(seconds=300)
 async def collect_talos() -> TalosOverview:
     version = await collect_talos_version()
     machine_config = await collect_talos_machine_config()

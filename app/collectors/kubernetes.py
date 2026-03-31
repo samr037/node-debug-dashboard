@@ -29,7 +29,7 @@ def _parse_resources(data: dict) -> K8sNodeResources:
     )
 
 
-@ttl_cache()
+@ttl_cache(seconds=60)
 async def collect_k8s_node_info() -> K8sNodeInfo:
     """Query the Kubernetes API for this node's info using the service account."""
     token = await read_file("/var/run/secrets/kubernetes.io/serviceaccount/token")
@@ -105,7 +105,7 @@ async def collect_k8s_node_info() -> K8sNodeInfo:
     )
 
 
-@ttl_cache()
+@ttl_cache(seconds=300)
 async def collect_k8s_certificates() -> list[CertificateInfo]:
     """Scan Kubernetes PKI directories for certificates and parse their details."""
     pki_dirs = [
@@ -193,7 +193,7 @@ async def collect_k8s_certificates() -> list[CertificateInfo]:
     return certs
 
 
-@ttl_cache()
+@ttl_cache(seconds=300)
 async def collect_k8s_components() -> list[K8sComponentStatus]:
     """Probe health endpoints for core Kubernetes components."""
     components = {
@@ -230,7 +230,7 @@ async def collect_k8s_components() -> list[K8sComponentStatus]:
     return results
 
 
-@ttl_cache()
+@ttl_cache(seconds=300)
 async def collect_k8s_api_endpoint() -> K8sApiEndpoint:
     """Check the Kubernetes API endpoint health."""
     host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
@@ -261,7 +261,7 @@ async def collect_k8s_api_endpoint() -> K8sApiEndpoint:
     )
 
 
-@ttl_cache()
+@ttl_cache(seconds=60)
 async def collect_cluster_nodes() -> list[ClusterNode]:
     """List all nodes in the cluster with name, IP, role, and readiness."""
     token = (

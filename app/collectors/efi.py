@@ -4,7 +4,7 @@ from app.collectors.base import run_command, ttl_cache
 from app.models.system import EFIBootEntry, EFIInfo
 
 
-@ttl_cache()
+@ttl_cache(seconds=300)
 async def collect_efi() -> EFIInfo:
     stdout, _, rc = await run_command(["efibootmgr", "-v"])
     if rc != 0:
