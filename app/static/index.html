@@ -24,7 +24,16 @@
         </div>
     </div>
 
-    <div class="cluster-bar" id="cluster-bar"></div>
+    <div class="cluster-bar" id="cluster-bar">
+        <div id="cluster-current" class="cluster-current"></div>
+        <div class="cluster-toggle-wrap">
+            <button id="cluster-toggle" class="cluster-toggle"><span id="cluster-count"></span> <span class="toggle-arrow">&#9660;</span></button>
+            <div id="cluster-dropdown" class="cluster-dropdown hidden">
+                <input type="text" id="cluster-search" class="cluster-search" placeholder="Search nodes...">
+                <div id="cluster-list" class="cluster-list"></div>
+            </div>
+        </div>
+    </div>
 
     <div class="node-bar" id="node-bar">
         <div class="loading"><span class="spinner"></span>Loading node info...</div>

@@ -9,6 +9,7 @@ from app.routers import (
     node,
     overview,
     processes,
+    sections,
     storage,
     system,
     talos,
@@ -31,6 +32,7 @@ app.include_router(kubernetes.router, prefix="/api/kubernetes")
 app.include_router(talos.router, prefix="/api/talos")
 app.include_router(containers.router, prefix="/api/containers")
 app.include_router(processes.router, prefix="/api/processes")
+app.include_router(sections.router, prefix="/api/sections")
 app.include_router(warnings.router, prefix="/api")
 app.include_router(overview.router, prefix="/api")
 

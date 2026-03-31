@@ -1,4 +1,8 @@
 // ── Theme ──
+function getCurrentTheme() {
+    return localStorage.getItem('theme') || 'auto';
+}
+
 function applyTheme(theme) {
     document.body.classList.remove('light', 'auto');
     if (theme === 'light') {
@@ -13,10 +17,18 @@ function applyTheme(theme) {
     localStorage.setItem('theme', theme);
 }
 
-// Apply saved theme immediately (before render) to avoid flash
+// Apply theme immediately: URL param > localStorage > auto (default)
 (function() {
-    const saved = localStorage.getItem('theme') || 'dark';
-    applyTheme(saved);
+    const urlTheme = new URLSearchParams(window.location.search).get('theme');
+    if (urlTheme && ['auto', 'light', 'dark'].includes(urlTheme)) {
+        applyTheme(urlTheme);
+        // Clean the URL param after saving to localStorage
+        const url = new URL(window.location);
+        url.searchParams.delete('theme');
+        window.history.replaceState({}, '', url);
+    } else {
+        applyTheme(getCurrentTheme());
+    }
 })();
 
 const REFRESH_INTERVAL = 10000;
@@ -24,12 +36,64 @@ let timer = null;
 let countdown = 10;
 let lastData = null;
 
+// Section fetching — fast sections first, slow ones in background
+const FAST_SECTIONS = ['node', 'hardware', 'warnings', 'containers', 'cluster_nodes'];
+const SLOW_SECTIONS = ['kubernetes', 'talos', 'storage', 'system', 'network', 'processes'];
+
+async function fetchSection(name) {
+    try {
+        const resp = await fetch(`/api/sections/${name}`);
+        if (!resp.ok) return null;
+        return await resp.json();
+    } catch {
+        return null;
+    }
+}
+
 async function fetchOverview() {
     try {
-        const resp = await fetch('/api/overview');
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        lastData = await resp.json();
-        render(lastData);
+        const openState = isFirstRender ? {} : saveOpenState();
+
+        // Fetch fast sections in parallel
+        const fastResults = await Promise.all(FAST_SECTIONS.map(s => fetchSection(s)));
+        const data = {};
+        FAST_SECTIONS.forEach((name, i) => { if (fastResults[i] != null) data[name] = fastResults[i]; });
+
+        // Render fast sections immediately
+        if (data.cluster_nodes) renderClusterBar(data.cluster_nodes);
+        if (data.node && data.hardware) renderNodeBar(data.node, data.hardware);
+        if (data.warnings) renderWarnings(data.warnings);
+        if (data.hardware) renderHardware(data.hardware);
+        if (data.containers) renderContainers(data.containers);
+
+        // Show header
+        if (data.node) {
+            const role = data.kubernetes?.node_info?.labels?.['node-role.kubernetes.io/control-plane'] !== undefined ? 'control-plane' : 'worker';
+            document.getElementById('header-node').innerHTML = `${esc(data.node.hostname)} <span class="role-badge ${role === 'control-plane' ? 'role-cp' : 'role-worker'}">${role}</span>`;
+        }
+
+        // Fetch slow sections in parallel (background)
+        const slowResults = await Promise.all(SLOW_SECTIONS.map(s => fetchSection(s)));
+        SLOW_SECTIONS.forEach((name, i) => { if (slowResults[i] != null) data[name] = slowResults[i]; });
+
+        // Render slow sections
+        if (data.kubernetes) renderKubernetes(data.kubernetes);
+        if (data.talos) renderTalos(data.talos);
+        if (data.storage) renderStorage(data.storage);
+        if (data.system) renderSystem(data.system);
+        if (data.network) renderNetwork(data.network);
+        if (data.processes) renderProcesses(data.processes);
+
+        // Update role badge now that K8s data is available
+        if (data.node && data.kubernetes) {
+            const role = data.kubernetes.node_info?.labels?.['node-role.kubernetes.io/control-plane'] !== undefined ? 'control-plane' : 'worker';
+            document.getElementById('header-node').innerHTML = `${esc(data.node.hostname)} <span class="role-badge ${role === 'control-plane' ? 'role-cp' : 'role-worker'}">${role}</span>`;
+        }
+
+        lastData = data;
+        if (!isFirstRender) restoreOpenState(openState);
+        isFirstRender = false;
+
         document.getElementById('status').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
         document.getElementById('error-bar')?.remove();
     } catch (err) {
@@ -82,40 +146,38 @@ function restoreOpenState(state) {
 
 let isFirstRender = true;
 
-function render(data) {
-    const openState = isFirstRender ? {} : saveOpenState();
-    renderClusterBar(data.kubernetes?.cluster_nodes || []);
-    renderNodeBar(data.node, data.hardware);
-    renderWarnings(data.warnings);
-    renderHardware(data.hardware);
-    renderStorage(data.storage);
-    renderSystem(data.system);
-    renderNetwork(data.network);
-    renderKubernetes(data.kubernetes);
-    renderTalos(data.talos);
-    renderContainers(data.containers);
-    renderProcesses(data.processes);
-    // Show hostname + role badge in header
-    const role = data.kubernetes?.node_info?.labels?.['node-role.kubernetes.io/control-plane'] !== undefined ? 'control-plane' : 'worker';
-    document.getElementById('header-node').innerHTML = `${esc(data.node.hostname)} <span class="role-badge ${role === 'control-plane' ? 'role-cp' : 'role-worker'}">${role}</span>`;
-    if (!isFirstRender) {
-        restoreOpenState(openState);
-    }
-    isFirstRender = false;
+// ── Cluster Node Bar ──
+let clusterNodes = [];
+
+function renderClusterBar(nodes) {
+    clusterNodes = nodes || [];
+    const el = document.getElementById('cluster-bar');
+    if (!clusterNodes.length) { el.style.display = 'none'; return; }
+    el.style.display = '';
+
+    const current = clusterNodes.find(n => n.current);
+    const cpCount = clusterNodes.filter(n => n.role === 'control-plane').length;
+    const readyCount = clusterNodes.filter(n => n.ready).length;
+
+    document.getElementById('cluster-current').innerHTML = current
+        ? `${current.role === 'control-plane' ? '<span class="cn-role cn-cp">CP</span>' : '<span class="cn-role cn-wk">W</span>'} <span class="cn-name">${esc(current.name)}</span> <span class="cn-ip">${esc(current.ip)}</span>`
+        : '';
+    document.getElementById('cluster-count').textContent = `${readyCount}/${clusterNodes.length} nodes`;
+    renderClusterList('');
 }
 
-// ── Cluster Node Bar ──
-function renderClusterBar(nodes) {
-    const el = document.getElementById('cluster-bar');
-    if (!nodes || !nodes.length) { el.innerHTML = ''; return; }
-    el.innerHTML = nodes.map(n => {
-        const cls = ['cluster-node'];
-        if (n.current) cls.push('current');
-        if (!n.ready) cls.push('offline');
-        const roleTag = n.role === 'control-plane' ? '<span class="cn-role cn-cp">CP</span>' : '<span class="cn-role cn-wk">W</span>';
-        const link = n.current ? '#' : `http://${n.ip}/`;
-        const readyDot = n.ready ? '<span class="cn-dot cn-ready"></span>' : '<span class="cn-dot cn-notready"></span>';
-        return `<a href="${link}" class="${cls.join(' ')}" title="${esc(n.name)} (${n.ip})">${readyDot}${roleTag}<span class="cn-name">${esc(n.name)}</span><span class="cn-ip">${esc(n.ip)}</span></a>`;
+function renderClusterList(query) {
+    const list = document.getElementById('cluster-list');
+    const theme = getCurrentTheme();
+    const filtered = clusterNodes.filter(n =>
+        !query || n.name.toLowerCase().includes(query) || n.ip.includes(query)
+    );
+    list.innerHTML = filtered.map(n => {
+        const dot = n.ready ? '<span class="cn-dot cn-ready"></span>' : '<span class="cn-dot cn-notready"></span>';
+        const role = n.role === 'control-plane' ? '<span class="cn-role cn-cp">CP</span>' : '<span class="cn-role cn-wk">W</span>';
+        const link = n.current ? '#' : `http://${n.ip}/?theme=${theme}`;
+        const cls = n.current ? 'cluster-item current' : 'cluster-item';
+        return `<a href="${link}" class="${cls}">${dot}${role}<span class="cn-name">${esc(n.name)}</span><span class="cn-ip">${esc(n.ip)}</span></a>`;
     }).join('');
 }
 
@@ -720,5 +782,30 @@ document.addEventListener('DOMContentLoaded', () => {
         const btn = e.target.closest('button[data-theme]');
         if (btn) applyTheme(btn.dataset.theme);
     });
+
+    // Cluster dropdown toggle
+    document.getElementById('cluster-toggle')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const dd = document.getElementById('cluster-dropdown');
+        dd.classList.toggle('hidden');
+        if (!dd.classList.contains('hidden')) {
+            document.getElementById('cluster-search').value = '';
+            document.getElementById('cluster-search').focus();
+            renderClusterList('');
+        }
+    });
+
+    // Cluster search
+    document.getElementById('cluster-search')?.addEventListener('input', (e) => {
+        renderClusterList(e.target.value.toLowerCase());
+    });
+
+    // Close dropdown on outside click
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.cluster-toggle-wrap')) {
+            document.getElementById('cluster-dropdown')?.classList.add('hidden');
+        }
+    });
+
     fetchOverview();
 });
