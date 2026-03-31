@@ -53,6 +53,7 @@ async function fetchSection(name) {
 async function fetchOverview() {
     try {
         const openState = isFirstRender ? {} : saveOpenState();
+        const scrollY = window.scrollY;
 
         // Fetch fast sections in parallel
         const fastResults = await Promise.all(FAST_SECTIONS.map(s => fetchSection(s)));
@@ -72,9 +73,18 @@ async function fetchOverview() {
             document.getElementById('header-node').innerHTML = `${esc(data.node.hostname)} <span class="role-badge ${role === 'control-plane' ? 'role-cp' : 'role-worker'}">${role}</span>`;
         }
 
+        // Restore scroll + open state after fast render
+        if (!isFirstRender) {
+            restoreOpenState(openState);
+            window.scrollTo(0, scrollY);
+        }
+
         // Fetch slow sections in parallel (background)
         const slowResults = await Promise.all(SLOW_SECTIONS.map(s => fetchSection(s)));
         SLOW_SECTIONS.forEach((name, i) => { if (slowResults[i] != null) data[name] = slowResults[i]; });
+
+        // Save scroll again before slow render
+        const scrollY2 = window.scrollY;
 
         // Render slow sections — also update SSH info + cluster bar once K8s data arrives
         if (data.kubernetes) {
@@ -94,7 +104,10 @@ async function fetchOverview() {
         }
 
         lastData = data;
-        if (!isFirstRender) restoreOpenState(openState);
+        if (!isFirstRender) {
+            restoreOpenState(openState);
+            window.scrollTo(0, scrollY2);
+        }
         isFirstRender = false;
 
         document.getElementById('status').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
