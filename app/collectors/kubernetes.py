@@ -4,10 +4,11 @@ import os
 from datetime import datetime, timezone
 
 from app.collectors.base import read_file, run_command, ttl_cache
-from app.config import HOST_ROOT
+from app.config import HOST_ROOT, SSH_ENABLED, SSH_PASSWORD_AUTH, SSH_PORT
 from app.models.kubernetes import (
     CertificateInfo,
     ClusterNode,
+    EtcdStatus,
     K8sApiEndpoint,
     K8sComponentStatus,
     K8sNodeAddress,
@@ -15,6 +16,7 @@ from app.models.kubernetes import (
     K8sNodeInfo,
     K8sNodeResources,
     KubernetesOverview,
+    SSHInfo,
 )
 
 
@@ -194,6 +196,70 @@ async def collect_k8s_certificates() -> list[CertificateInfo]:
 
 
 @ttl_cache(seconds=300)
+async def _collect_etcd_status() -> EtcdStatus:
+    """Get detailed etcd metrics via the etcd API."""
+    ca = f"{HOST_ROOT}/etc/kubernetes/pki/etcd/ca.crt"
+    cert = f"{HOST_ROOT}/etc/kubernetes/pki/etcd/server.crt"
+    key = f"{HOST_ROOT}/etc/kubernetes/pki/etcd/server.key"
+    base_curl = [
+        "curl",
+        "-s",
+        "--max-time",
+        "3",
+        "--cacert",
+        ca,
+        "--cert",
+        cert,
+        "--key",
+        key,
+    ]
+
+    # Get status (db size, leader, raft index)
+    stdout, _, rc = await run_command(
+        base_curl
+        + ["https://localhost:2379/v3/maintenance/status", "-X", "POST", "-d", "{}"]
+    )
+    status = EtcdStatus()
+    if rc == 0 and stdout.strip():
+        try:
+            data = json.loads(stdout)
+            header = data.get("header", {})
+            status.member_id = str(header.get("member_id", ""))
+            status.raft_index = int(header.get("raft_index", 0))
+            status.leader_id = str(data.get("leader", ""))
+            status.is_leader = status.member_id == status.leader_id
+            status.db_size_mb = round(int(data.get("dbSize", 0)) / 1048576, 1)
+            status.db_size_in_use_mb = round(
+                int(data.get("dbSizeInUse", 0)) / 1048576, 1
+            )
+            status.healthy = True
+        except (json.JSONDecodeError, ValueError, KeyError):
+            pass
+
+    # Get member list
+    stdout, _, rc = await run_command(
+        base_curl
+        + ["https://localhost:2379/v3/cluster/member/list", "-X", "POST", "-d", "{}"]
+    )
+    if rc == 0 and stdout.strip():
+        try:
+            data = json.loads(stdout)
+            for m in data.get("members", []):
+                status.members.append(
+                    {
+                        "id": str(m.get("ID", "")),
+                        "name": m.get("name", ""),
+                        "peer_urls": m.get("peerURLs", []),
+                        "client_urls": m.get("clientURLs", []),
+                    }
+                )
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    return status
+
+
+@ttl_cache(seconds=300)
 async def collect_k8s_components() -> list[K8sComponentStatus]:
     """Probe health endpoints for core Kubernetes components."""
     components = {
@@ -219,11 +285,16 @@ async def collect_k8s_components() -> list[K8sComponentStatus]:
             health_status = "Unhealthy"
             running = False
 
+        etcd_status = None
+        if name == "etcd" and running:
+            etcd_status = await _collect_etcd_status()
+
         results.append(
             K8sComponentStatus(
                 name=name,
                 running=running,
                 health_status=health_status,
+                etcd_status=etcd_status,
             )
         )
 
@@ -342,4 +413,9 @@ async def collect_kubernetes() -> KubernetesOverview:
         api_endpoint=await collect_k8s_api_endpoint(),
         components=await collect_k8s_components(),
         cluster_nodes=await collect_cluster_nodes(),
+        ssh_info=SSHInfo(
+            enabled=SSH_ENABLED,
+            port=SSH_PORT,
+            password_auth=SSH_PASSWORD_AUTH,
+        ),
     )

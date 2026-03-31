@@ -60,7 +60,7 @@ async function fetchOverview() {
         FAST_SECTIONS.forEach((name, i) => { if (fastResults[i] != null) data[name] = fastResults[i]; });
 
         // Render fast sections immediately
-        if (data.cluster_nodes) renderClusterBar(data.cluster_nodes);
+        if (data.cluster_nodes) renderClusterBar(data.cluster_nodes, data.kubernetes?.ssh_info);
         if (data.node && data.hardware) renderNodeBar(data.node, data.hardware);
         if (data.warnings) renderWarnings(data.warnings);
         if (data.hardware) renderHardware(data.hardware);
@@ -76,8 +76,11 @@ async function fetchOverview() {
         const slowResults = await Promise.all(SLOW_SECTIONS.map(s => fetchSection(s)));
         SLOW_SECTIONS.forEach((name, i) => { if (slowResults[i] != null) data[name] = slowResults[i]; });
 
-        // Render slow sections
-        if (data.kubernetes) renderKubernetes(data.kubernetes);
+        // Render slow sections — also update SSH info + cluster bar once K8s data arrives
+        if (data.kubernetes) {
+            renderKubernetes(data.kubernetes);
+            if (data.kubernetes.ssh_info) renderClusterBar(clusterNodes, data.kubernetes.ssh_info);
+        }
         if (data.talos) renderTalos(data.talos);
         if (data.storage) renderStorage(data.storage);
         if (data.system) renderSystem(data.system);
@@ -148,20 +151,28 @@ let isFirstRender = true;
 
 // ── Cluster Node Bar ──
 let clusterNodes = [];
+let sshInfo = { enabled: false, port: 2022, password_auth: true };
 
-function renderClusterBar(nodes) {
+function renderClusterBar(nodes, ssh) {
     clusterNodes = nodes || [];
+    if (ssh) sshInfo = ssh;
     const el = document.getElementById('cluster-bar');
     if (!clusterNodes.length) { el.style.display = 'none'; return; }
     el.style.display = '';
 
     const current = clusterNodes.find(n => n.current);
-    const cpCount = clusterNodes.filter(n => n.role === 'control-plane').length;
     const readyCount = clusterNodes.filter(n => n.ready).length;
 
-    document.getElementById('cluster-current').innerHTML = current
-        ? `${current.role === 'control-plane' ? '<span class="cn-role cn-cp">CP</span>' : '<span class="cn-role cn-wk">W</span>'} <span class="cn-name">${esc(current.name)}</span> <span class="cn-ip">${esc(current.ip)}</span>`
-        : '';
+    let currentHtml = '';
+    if (current) {
+        const roleTag = current.role === 'control-plane' ? '<span class="cn-role cn-cp">CP</span>' : '<span class="cn-role cn-wk">W</span>';
+        currentHtml = `${roleTag} <span class="cn-name">${esc(current.name)}</span> <span class="cn-ip">${esc(current.ip)}</span>`;
+        if (sshInfo.enabled) {
+            const sshCmd = `ssh -p ${sshInfo.port} debug@${current.ip}`;
+            currentHtml += ` <span class="ssh-badge" title="Click to copy: ${sshCmd}" onclick="navigator.clipboard.writeText('${sshCmd}');this.textContent='Copied!';setTimeout(()=>this.textContent='SSH',1000)">SSH</span>`;
+        }
+    }
+    document.getElementById('cluster-current').innerHTML = currentHtml;
     document.getElementById('cluster-count').textContent = `${readyCount}/${clusterNodes.length} nodes`;
     renderClusterList('');
 }
@@ -177,7 +188,10 @@ function renderClusterList(query) {
         const role = n.role === 'control-plane' ? '<span class="cn-role cn-cp">CP</span>' : '<span class="cn-role cn-wk">W</span>';
         const link = n.current ? '#' : `http://${n.ip}/?theme=${theme}`;
         const cls = n.current ? 'cluster-item current' : 'cluster-item';
-        return `<a href="${link}" class="${cls}">${dot}${role}<span class="cn-name">${esc(n.name)}</span><span class="cn-ip">${esc(n.ip)}</span></a>`;
+        const sshBadge = sshInfo.enabled && n.ready
+            ? `<span class="ssh-badge-sm" title="ssh -p ${sshInfo.port} debug@${n.ip}" onclick="event.preventDefault();navigator.clipboard.writeText('ssh -p ${sshInfo.port} debug@${n.ip}');this.textContent='Copied!';setTimeout(()=>this.textContent='SSH',1000)">SSH</span>`
+            : '';
+        return `<a href="${link}" class="${cls}">${dot}${role}<span class="cn-name">${esc(n.name)}</span>${sshBadge}<span class="cn-ip">${esc(n.ip)}</span></a>`;
     }).join('');
 }
 
@@ -594,7 +608,7 @@ function renderKubernetes(k8s) {
 
     // Components
     if (k8s.components.length) {
-        html += subSection('k8s-components', 'Components', table(
+        let compHtml = table(
             ['Name', 'Running', 'Health', 'Uptime'],
             k8s.components.map(c => [
                 c.name,
@@ -602,7 +616,34 @@ function renderKubernetes(k8s) {
                 severityBadge(c.health_status === 'Healthy' ? 'ok' : c.health_status === 'Unknown' ? '' : 'critical', c.health_status),
                 c.uptime || '-'
             ])
-        ));
+        );
+
+        // etcd details (CP nodes only)
+        const etcd = k8s.components.find(c => c.name === 'etcd' && c.etcd_status);
+        if (etcd && etcd.etcd_status) {
+            const e = etcd.etcd_status;
+            compHtml += '<div style="margin-top:10px;font-weight:500;color:var(--text-bright)">etcd Details</div>';
+            compHtml += `<div class="kv-grid">
+                <span class="kv-key">DB Size</span><span class="kv-val">${e.db_size_mb} MB</span>
+                <span class="kv-key">DB In Use</span><span class="kv-val">${e.db_size_in_use_mb} MB</span>
+                <span class="kv-key">Leader</span><span class="kv-val">${e.is_leader ? severityBadge('ok', 'This node') : esc(e.leader_id)}</span>
+                <span class="kv-key">Member ID</span><span class="kv-val">${esc(e.member_id)}</span>
+                <span class="kv-key">Raft Index</span><span class="kv-val">${e.raft_index}</span>
+            </div>`;
+            if (e.members.length) {
+                compHtml += '<div style="margin-top:6px;font-weight:500;color:var(--text-bright)">etcd Members</div>';
+                compHtml += table(['Name', 'ID', 'Client URLs', 'Peer URLs'],
+                    e.members.map(m => [
+                        esc(m.name),
+                        m.id === e.leader_id ? severityBadge('ok', m.id + ' (leader)') : esc(m.id),
+                        (m.client_urls || []).join(', '),
+                        (m.peer_urls || []).join(', ')
+                    ])
+                );
+            }
+        }
+
+        html += subSection('k8s-components', 'Components', compHtml);
     }
 
     html += '</div></details>';
@@ -613,7 +654,8 @@ function renderKubernetes(k8s) {
 function renderTalos(talos) {
     const el = document.getElementById('talos-section');
     if (!talos) { el.innerHTML = ''; return; }
-    let html = '<details data-id="talos"><summary>Talos</summary><div class="section-content">';
+    const talosLogo = '<svg viewBox="0 0 24 24" width="16" height="16" style="vertical-align:middle;margin-right:6px"><polygon points="12,2 22,7.5 22,16.5 12,22 2,16.5 2,7.5" fill="none" stroke="var(--cyan)" stroke-width="1.5"/><text x="12" y="15" text-anchor="middle" font-size="9" font-weight="700" fill="var(--cyan)" font-family="monospace">T</text></svg>';
+    let html = `<details data-id="talos"><summary>${talosLogo}Talos</summary><div class="section-content">`;
 
     // Version
     let versionHtml = `<div class="kv-grid">
