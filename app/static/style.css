@@ -134,6 +134,54 @@ body {
 .theme-toggle button:hover { color: var(--text); }
 .theme-toggle button.active { background: var(--bg-hover); color: var(--cyan); }
 
+/* Cluster node bar */
+.cluster-bar {
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    padding: 6px 20px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 11px;
+}
+
+.cluster-node {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    text-decoration: none;
+    color: var(--text);
+    transition: background 0.15s;
+}
+
+.cluster-node:hover { background: var(--bg-hover); }
+.cluster-node.current { border-color: var(--cyan); background: var(--bg-hover); }
+.cluster-node.offline { opacity: 0.5; }
+
+.cn-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.cn-ready { background: var(--green); }
+.cn-notready { background: var(--red); }
+
+.cn-role {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 0 4px;
+    border-radius: 2px;
+}
+.cn-cp { background: rgba(88, 166, 255, 0.2); color: var(--blue); }
+.cn-wk { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+
+.cn-name { font-weight: 500; }
+.cn-ip { color: var(--text-dim); }
+
 /* Role badge */
 .role-badge {
     font-size: 10px;

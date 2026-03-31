@@ -60,8 +60,17 @@ class K8sApiEndpoint(BaseModel):
     healthy: bool = False
 
 
+class ClusterNode(BaseModel):
+    name: str = ""
+    ip: str = ""
+    role: str = "worker"  # "control-plane" or "worker"
+    ready: bool = False
+    current: bool = False  # True if this is the node we're running on
+
+
 class KubernetesOverview(BaseModel):
     node_info: K8sNodeInfo = K8sNodeInfo()
     certificates: list[CertificateInfo] = []
     api_endpoint: K8sApiEndpoint = K8sApiEndpoint()
     components: list[K8sComponentStatus] = []
+    cluster_nodes: list[ClusterNode] = []
