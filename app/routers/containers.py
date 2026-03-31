@@ -1,13 +1,16 @@
 import asyncio
+import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.collectors.base import run_command
 from app.collectors.containers import (
     CRI_ENDPOINT,
     collect_containers,
     collect_system_containers,
     collect_workload_containers,
 )
+from app.config import HOST_ROOT
 from app.models.containers import (
     ContainersOverview,
     SystemContainer,
@@ -35,6 +38,25 @@ async def get_workload_containers():
     return await collect_workload_containers()
 
 
+async def _get_container_log_path(container_id: str) -> str | None:
+    """Get the host log file path for a container via crictl inspect."""
+    stdout, _, rc = await run_command(
+        ["crictl", "--runtime-endpoint", CRI_ENDPOINT, "inspect", container_id],
+        timeout=5,
+    )
+    if rc != 0 or not stdout.strip():
+        return None
+    try:
+        data = json.loads(stdout)
+        log_path = data.get("status", {}).get("logPath", "")
+        if log_path:
+            # Convert host path to our mount: /var/log/pods/... -> /host/var/log/pods/...
+            return f"{HOST_ROOT}{log_path}"
+    except (json.JSONDecodeError, KeyError):
+        pass
+    return None
+
+
 @router.websocket("/{container_id}/logs")
 async def container_logs(websocket: WebSocket, container_id: str):
     """Live log stream for a container via WebSocket."""
@@ -45,15 +67,19 @@ async def container_logs(websocket: WebSocket, container_id: str):
 
     await websocket.accept()
 
+    # Get log file path from crictl inspect, then tail -f it
+    log_path = await _get_container_log_path(container_id)
+    if not log_path:
+        await websocket.send_text("[Error: could not find log path for container]\n")
+        await websocket.close()
+        return
+
     process = await asyncio.create_subprocess_exec(
-        "crictl",
-        "--runtime-endpoint",
-        CRI_ENDPOINT,
-        "logs",
-        "-f",
-        "--tail",
+        "tail",
+        "-n",
         "200",
-        container_id,
+        "-f",
+        log_path,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
