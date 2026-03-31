@@ -9,10 +9,15 @@
 <body>
     <div class="header">
         <div class="header-left">
-            <span class="header-title">IOSTACK Node Debug Dashboard</span>
+            <span class="header-title">Node Debug Dashboard</span>
             <span class="header-node" id="header-node">Loading...</span>
         </div>
         <div class="header-right">
+            <div class="theme-toggle" id="theme-toggle">
+                <button data-theme="auto" title="Follow OS preference">Auto</button>
+                <button data-theme="light" title="Light theme">Light</button>
+                <button data-theme="dark" title="Dark theme">Dark</button>
+            </div>
             <span>Refresh: <span id="countdown">10</span>s</span>
             <button class="refresh-btn" id="refresh-btn">Refresh Now</button>
         </div>

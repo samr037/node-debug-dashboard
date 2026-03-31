@@ -1,3 +1,4 @@
+/* Dark theme (default) */
 :root {
     --bg: #0d1117;
     --bg-card: #161b22;
@@ -12,6 +13,40 @@
     --blue: #58a6ff;
     --cyan: #39d4e9;
     --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', 'Consolas', monospace;
+}
+
+/* Light theme */
+body.light {
+    --bg: #f6f8fa;
+    --bg-card: #ffffff;
+    --bg-hover: #eaeef2;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text-dim: #656d76;
+    --text-bright: #1f2328;
+    --green: #1a7f37;
+    --yellow: #9a6700;
+    --red: #cf222e;
+    --blue: #0969da;
+    --cyan: #0284a8;
+}
+
+/* Auto mode: apply light when OS prefers light and no explicit class */
+@media (prefers-color-scheme: light) {
+    body.auto {
+        --bg: #f6f8fa;
+        --bg-card: #ffffff;
+        --bg-hover: #eaeef2;
+        --border: #d0d7de;
+        --text: #1f2328;
+        --text-dim: #656d76;
+        --text-bright: #1f2328;
+        --green: #1a7f37;
+        --yellow: #9a6700;
+        --red: #cf222e;
+        --blue: #0969da;
+        --cyan: #0284a8;
+    }
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -75,6 +110,29 @@ body {
     cursor: pointer;
 }
 .refresh-btn:hover { background: var(--bg-hover); }
+
+/* Theme toggle */
+.theme-toggle {
+    display: flex;
+    gap: 2px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.theme-toggle button {
+    background: transparent;
+    color: var(--text-dim);
+    border: none;
+    padding: 3px 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.theme-toggle button:hover { color: var(--text); }
+.theme-toggle button.active { background: var(--bg-hover); color: var(--cyan); }
 
 /* Node info bar */
 .node-bar {

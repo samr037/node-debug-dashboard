@@ -1,3 +1,24 @@
+// ── Theme ──
+function applyTheme(theme) {
+    document.body.classList.remove('light', 'auto');
+    if (theme === 'light') {
+        document.body.classList.add('light');
+    } else if (theme === 'auto') {
+        document.body.classList.add('auto');
+    }
+    // dark = no class needed (default)
+    document.querySelectorAll('.theme-toggle button').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.theme === theme);
+    });
+    localStorage.setItem('theme', theme);
+}
+
+// Apply saved theme immediately (before render) to avoid flash
+(function() {
+    const saved = localStorage.getItem('theme') || 'dark';
+    applyTheme(saved);
+})();
+
 const REFRESH_INTERVAL = 10000;
 let timer = null;
 let countdown = 10;
@@ -657,5 +678,9 @@ function closeLogViewer() {
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('refresh-btn').addEventListener('click', fetchOverview);
     document.getElementById('log-modal-close')?.addEventListener('click', closeLogViewer);
+    document.getElementById('theme-toggle')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-theme]');
+        if (btn) applyTheme(btn.dataset.theme);
+    });
     fetchOverview();
 });
