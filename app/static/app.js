@@ -41,7 +41,28 @@ function resetCountdown() {
     }, 1000);
 }
 
+// ── Details open state persistence ──
+function saveOpenState() {
+    const state = {};
+    document.querySelectorAll('details[data-id]').forEach(d => {
+        state[d.dataset.id] = d.open;
+    });
+    return state;
+}
+
+function restoreOpenState(state) {
+    document.querySelectorAll('details[data-id]').forEach(d => {
+        const id = d.dataset.id;
+        if (id in state) {
+            d.open = state[id];
+        }
+    });
+}
+
+let isFirstRender = true;
+
 function render(data) {
+    const openState = isFirstRender ? {} : saveOpenState();
     renderNodeBar(data.node);
     renderWarnings(data.warnings);
     renderHardware(data.hardware);
@@ -49,6 +70,10 @@ function render(data) {
     renderSystem(data.system);
     renderNetwork(data.network);
     document.getElementById('header-node').textContent = data.node.hostname;
+    if (!isFirstRender) {
+        restoreOpenState(openState);
+    }
+    isFirstRender = false;
 }
 
 // ── Node Info Bar ──
@@ -76,7 +101,7 @@ function renderWarnings(warnings) {
 
     el.className = 'warnings-banner ' + (crits.length ? 'has-critical' : warns.length ? 'has-warning' : 'all-ok');
 
-    let html = '<details open><summary>';
+    let html = '<details data-id="warnings" open><summary>';
     if (crits.length + warns.length === 0) {
         html += '<span class="badge ok">OK</span> No warnings';
     } else {
@@ -102,10 +127,10 @@ function renderWarnings(warnings) {
 // ── Hardware ──
 function renderHardware(hw) {
     const el = document.getElementById('hardware-section');
-    let html = '<details><summary>Hardware</summary><div class="section-content">';
+    let html = '<details data-id="hardware"><summary>Hardware</summary><div class="section-content">';
 
     // CPU
-    html += subSection('CPU', `
+    html += subSection('hw-cpu', 'CPU', `
         <div class="kv-grid">
             <span class="kv-key">Model</span><span class="kv-val">${esc(hw.cpu.model)}</span>
             <span class="kv-key">Architecture</span><span class="kv-val">${esc(hw.cpu.architecture)}</span>
@@ -135,11 +160,11 @@ function renderHardware(hw) {
             ])
         );
     }
-    html += subSection('Memory (DIMMs)', memHtml);
+    html += subSection('hw-memory', 'Memory (DIMMs)', memHtml);
 
     // PCI
     if (hw.pci_devices.length) {
-        html += subSection('PCI Devices', table(
+        html += subSection('hw-pci', 'PCI Devices', table(
             ['Slot', 'Class', 'Vendor', 'Device', 'Driver'],
             hw.pci_devices.map(d => [d.slot, d.class_name, d.vendor, d.device, d.driver || '-'])
         ));
@@ -147,7 +172,7 @@ function renderHardware(hw) {
 
     // USB
     if (hw.usb_devices.length) {
-        html += subSection('USB Devices', table(
+        html += subSection('hw-usb', 'USB Devices', table(
             ['Bus', 'Dev', 'ID', 'Name'],
             hw.usb_devices.map(d => [d.bus, d.device, d.id, d.name])
         ));
@@ -155,7 +180,7 @@ function renderHardware(hw) {
 
     // NICs
     if (hw.nics.length) {
-        html += subSection('Network Interfaces', table(
+        html += subSection('hw-nics', 'Network Interfaces', table(
             ['Name', 'MAC', 'Driver', 'Speed', 'Link', 'IPs', 'Errors'],
             hw.nics.map(n => [
                 n.name, n.mac, n.driver || '-', n.speed || '-',
@@ -186,12 +211,12 @@ function renderHardware(hw) {
                 ])
             );
         }
-        html += subSection('Sensors', sensorsHtml);
+        html += subSection('hw-sensors', 'Sensors', sensorsHtml);
     }
 
     // GPUs
     if (hw.gpus.length) {
-        html += subSection('GPU', table(
+        html += subSection('hw-gpus', 'GPU', table(
             ['#', 'Name', 'Driver', 'VRAM', 'Used', 'Temp', 'Util', 'Power'],
             hw.gpus.map(g => [
                 g.index, g.name, g.driver_version,
@@ -210,7 +235,7 @@ function renderHardware(hw) {
 // ── Storage ──
 function renderStorage(storage) {
     const el = document.getElementById('storage-section');
-    let html = '<details><summary>Storage</summary><div class="section-content">';
+    let html = '<details data-id="storage"><summary>Storage</summary><div class="section-content">';
 
     // Disks
     if (storage.disks.length) {
@@ -230,7 +255,7 @@ function renderStorage(storage) {
                 );
             }
         }
-        html += subSection('Disks & Partitions', disksHtml);
+        html += subSection('stor-disks', 'Disks & Partitions', disksHtml);
     }
 
     // SMART
@@ -248,7 +273,8 @@ function renderStorage(storage) {
                 <span class="kv-key">Reallocated Sectors</span><span class="kv-val ${(s.reallocated_sectors || 0) > 0 ? 'sev-warning' : ''}">${s.reallocated_sectors != null ? s.reallocated_sectors : '-'}</span>
             </div>`;
             if (s.attributes.length) {
-                smartHtml += `<details class="sub-section" style="margin-top:4px"><summary>SMART Attributes (${s.attributes.length})</summary><div class="section-content">`;
+                const devId = s.device.replace(/\//g, '-');
+                smartHtml += `<details data-id="smart-attr-${devId}" class="sub-section" style="margin-top:4px"><summary>SMART Attributes (${s.attributes.length})</summary><div class="section-content">`;
                 smartHtml += table(
                     ['ID', 'Name', 'Value', 'Worst', 'Thresh', 'Raw'],
                     s.attributes.map(a => [a.id, a.name, a.value, a.worst, a.threshold, a.raw_value])
@@ -256,12 +282,12 @@ function renderStorage(storage) {
                 smartHtml += '</div></details>';
             }
         }
-        html += subSection('SMART Health', smartHtml);
+        html += subSection('stor-smart', 'SMART Health', smartHtml);
     }
 
     // Usage
     if (storage.usage.length) {
-        html += subSection('Disk Usage', table(
+        html += subSection('stor-usage', 'Disk Usage', table(
             ['Filesystem', 'Mount', 'Type', 'Size', 'Used', 'Avail', 'Used%'],
             storage.usage.map(u => [
                 u.filesystem, u.mount, u.fs_type, u.size, u.used, u.available,
@@ -278,7 +304,7 @@ function renderStorage(storage) {
 function renderSystem(sys) {
     const el = document.getElementById('system-section');
     const efi = sys.efi;
-    let html = '<details><summary>System</summary><div class="section-content">';
+    let html = '<details data-id="system"><summary>System</summary><div class="section-content">';
 
     if (efi.entries.length) {
         let efiHtml = `<div class="kv-grid">
@@ -295,7 +321,7 @@ function renderSystem(sys) {
                 `<span style="color:var(--text-dim);font-size:11px">${esc(e.path)}</span>`
             ])
         );
-        html += subSection('UEFI Boot Order', efiHtml);
+        html += subSection('sys-efi', 'UEFI Boot Order', efiHtml);
     } else {
         html += '<div style="color:var(--text-dim);padding:8px 0">EFI boot manager not available (legacy BIOS or not accessible)</div>';
     }
@@ -307,7 +333,7 @@ function renderSystem(sys) {
 // ── Network ──
 function renderNetwork(net) {
     const el = document.getElementById('network-section');
-    let html = '<details><summary>Network</summary><div class="section-content">';
+    let html = '<details data-id="network"><summary>Network</summary><div class="section-content">';
 
     const conn = net.connectivity;
     let connHtml = `<div class="kv-grid">
@@ -317,10 +343,10 @@ function renderNetwork(net) {
         <span class="kv-key">Internet</span><span class="kv-val ${conn.internet_ok ? 'sev-ok' : 'sev-critical'}">${conn.internet_ok ? 'Reachable' : 'Unreachable'}</span>
         <span class="kv-key">K8s API</span><span class="kv-val ${conn.kubernetes_api_ok ? 'sev-ok' : 'sev-critical'}">${conn.kubernetes_api_ok ? 'Reachable' : 'Unreachable'}</span>
     </div>`;
-    html += subSection('Connectivity', connHtml);
+    html += subSection('net-conn', 'Connectivity', connHtml);
 
     if (net.interfaces.length) {
-        html += subSection('Interfaces', table(
+        html += subSection('net-ifaces', 'Interfaces', table(
             ['Name', 'MAC', 'Driver', 'Speed', 'Duplex', 'Link', 'IPs'],
             net.interfaces.map(n => [
                 n.name, n.mac, n.driver || '-', n.speed || '-', n.duplex || '-',
@@ -355,8 +381,8 @@ function table(headers, rows) {
     return html;
 }
 
-function subSection(title, content) {
-    return `<details class="sub-section"><summary>${esc(title)}</summary><div class="section-content">${content}</div></details>`;
+function subSection(id, title, content) {
+    return `<details data-id="${esc(id)}" class="sub-section"><summary>${esc(title)}</summary><div class="section-content">${content}</div></details>`;
 }
 
 // ── Init ──
