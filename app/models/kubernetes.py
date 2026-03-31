@@ -47,12 +47,24 @@ class CertificateInfo(BaseModel):
     expiry_severity: str = "ok"
 
 
+class EtcdStatus(BaseModel):
+    healthy: bool = False
+    db_size_mb: float = 0
+    db_size_in_use_mb: float = 0
+    leader_id: str = ""
+    member_id: str = ""
+    is_leader: bool = False
+    raft_index: int = 0
+    members: list[dict] = []
+
+
 class K8sComponentStatus(BaseModel):
     name: str = ""
     running: bool = False
     health_status: str = "Unknown"
     container_id: str = ""
     uptime: str = ""
+    etcd_status: EtcdStatus | None = None
 
 
 class K8sApiEndpoint(BaseModel):
@@ -68,9 +80,16 @@ class ClusterNode(BaseModel):
     current: bool = False  # True if this is the node we're running on
 
 
+class SSHInfo(BaseModel):
+    enabled: bool = False
+    port: int = 2022
+    password_auth: bool = True
+
+
 class KubernetesOverview(BaseModel):
     node_info: K8sNodeInfo = K8sNodeInfo()
     certificates: list[CertificateInfo] = []
     api_endpoint: K8sApiEndpoint = K8sApiEndpoint()
     components: list[K8sComponentStatus] = []
     cluster_nodes: list[ClusterNode] = []
+    ssh_info: SSHInfo = SSHInfo()
