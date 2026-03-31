@@ -134,6 +134,18 @@ body {
 .theme-toggle button:hover { color: var(--text); }
 .theme-toggle button.active { background: var(--bg-hover); color: var(--cyan); }
 
+/* Role badge */
+.role-badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 600;
+    vertical-align: middle;
+    margin-left: 6px;
+}
+.role-cp { background: rgba(88, 166, 255, 0.2); color: var(--blue); }
+.role-worker { background: rgba(63, 185, 80, 0.2); color: var(--green); }
+
 /* Node info bar */
 .node-bar {
     background: var(--bg-card);
@@ -141,8 +153,23 @@ body {
     padding: 10px 20px;
     display: flex;
     flex-wrap: wrap;
-    gap: 24px;
+    gap: 16px;
     font-size: 12px;
+    align-items: center;
+}
+
+.node-bar-info {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    flex: 1;
+    min-width: 0;
+}
+
+.node-bar-gauges {
+    display: flex;
+    gap: 16px;
+    flex-shrink: 0;
 }
 
 .node-bar .item {
@@ -156,6 +183,42 @@ body {
 
 .node-bar .value {
     color: var(--text-bright);
+}
+
+/* Gauges */
+.gauge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 180px;
+}
+
+.gauge-label {
+    color: var(--text-dim);
+    font-weight: 600;
+    width: 30px;
+    flex-shrink: 0;
+}
+
+.gauge-bar {
+    width: 80px;
+    height: 8px;
+    background: var(--bg);
+    border-radius: 4px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.gauge-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.gauge-value {
+    color: var(--text-bright);
+    font-size: 11px;
+    white-space: nowrap;
 }
 
 /* Main content */
@@ -408,10 +471,34 @@ tr:hover td {
     margin: 0;
 }
 
-/* Responsive */
+/* Table scroll wrapper */
+.section-content { overflow-x: auto; }
+
+/* Responsive — tablet */
 @media (max-width: 768px) {
-    .node-bar { gap: 12px; font-size: 11px; }
-    .header { flex-direction: column; gap: 8px; }
+    .header { flex-direction: column; gap: 8px; align-items: flex-start; }
+    .header-right { width: 100%; justify-content: space-between; }
+    .node-bar { flex-direction: column; gap: 10px; padding: 10px 12px; }
+    .node-bar-info { gap: 8px; font-size: 11px; }
+    .node-bar-gauges { width: 100%; }
+    .gauge { flex: 1; min-width: 140px; }
     .kv-grid { grid-template-columns: 1fr; }
+    .main { padding: 10px 8px; }
+    summary { padding: 8px 12px; font-size: 12px; }
+    table { font-size: 11px; }
+    th, td { padding: 4px 6px; }
     .log-modal { height: 70vh; }
+}
+
+/* Responsive — phone */
+@media (max-width: 480px) {
+    body { font-size: 12px; }
+    .header-title { font-size: 13px; }
+    .header-node { font-size: 12px; }
+    .node-bar-gauges { flex-direction: column; gap: 6px; }
+    .gauge { min-width: 0; }
+    .gauge-bar { width: 60px; }
+    table { font-size: 10px; display: block; overflow-x: auto; white-space: nowrap; }
+    .log-modal { height: 80vh; }
+    .log-content { font-size: 10px; }
 }
