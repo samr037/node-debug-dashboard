@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Node Debug Dashboard</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <span class="header-title">IOSTACK Node Debug Dashboard</span>
+            <span class="header-node" id="header-node">Loading...</span>
+        </div>
+        <div class="header-right">
+            <span>Refresh: <span id="countdown">10</span>s</span>
+            <button class="refresh-btn" id="refresh-btn">Refresh Now</button>
+        </div>
+    </div>
+
+    <div class="node-bar" id="node-bar">
+        <div class="loading"><span class="spinner"></span>Loading node info...</div>
+    </div>
+
+    <div class="main">
+        <div id="warnings-section" class="warnings-banner all-ok">
+            <div class="loading"><span class="spinner"></span>Loading...</div>
+        </div>
+        <div id="hardware-section"></div>
+        <div id="storage-section"></div>
+        <div id="system-section"></div>
+        <div id="network-section"></div>
+    </div>
+
+    <div class="footer">
+        <div>
+            <a href="/docs" target="_blank">API Docs (Swagger)</a>
+            &nbsp;|&nbsp;
+            <a href="/api/overview" target="_blank">Raw JSON</a>
+        </div>
+        <div id="status">Connecting...</div>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>
