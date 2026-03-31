@@ -1,12 +1,28 @@
+import os
+
 from app.collectors.base import run_command, ttl_cache
+from app.config import HOST_ROOT
 from app.models.hardware import GPUInfo
+
+
+def _find_nvidia_smi() -> str:
+    """Find nvidia-smi binary — check host paths first, then container PATH."""
+    host_paths = [
+        f"{HOST_ROOT}/usr/local/bin/nvidia-smi",
+        f"{HOST_ROOT}/usr/bin/nvidia-smi",
+    ]
+    for path in host_paths:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return "nvidia-smi"  # fallback to container PATH
 
 
 @ttl_cache()
 async def collect_gpus() -> list[GPUInfo]:
+    nvidia_smi = _find_nvidia_smi()
     stdout, _, rc = await run_command(
         [
-            "nvidia-smi",
+            nvidia_smi,
             "--query-gpu=index,name,driver_version,memory.total,memory.used,temperature.gpu,utilization.gpu,power.draw",
             "--format=csv,noheader,nounits",
         ]
