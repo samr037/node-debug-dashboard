@@ -13,7 +13,7 @@ from app.models.storage import (
 )
 
 
-@ttl_cache()
+@ttl_cache(seconds=300)
 async def collect_storage() -> StorageOverview:
     disks = await collect_disks()
     smart = await collect_all_smart()
@@ -21,7 +21,7 @@ async def collect_storage() -> StorageOverview:
     return StorageOverview(disks=disks, smart=smart, usage=usage)
 
 
-@ttl_cache()
+@ttl_cache(seconds=300)
 async def collect_disks() -> list[DiskInfo]:
     stdout, _, rc = await run_command(
         [
@@ -148,7 +148,7 @@ async def collect_smart_for_device(device: str) -> SmartHealth | None:
     )
 
 
-@ttl_cache()
+@ttl_cache(seconds=300)
 async def collect_all_smart() -> list[SmartHealth]:
     results: list[SmartHealth] = []
     for pattern in ("/dev/sd?", "/dev/nvme?"):
@@ -161,7 +161,7 @@ async def collect_all_smart() -> list[SmartHealth]:
     return results
 
 
-@ttl_cache()
+@ttl_cache(seconds=300)
 async def collect_disk_usage() -> list[DiskUsage]:
     stdout, _, rc = await run_command(
         [

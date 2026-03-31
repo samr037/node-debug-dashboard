@@ -140,26 +140,82 @@ body {
     border-bottom: 1px solid var(--border);
     padding: 6px 20px;
     display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    font-size: 11px;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
 }
 
-.cluster-node {
-    display: inline-flex;
+.cluster-current {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+}
+
+.cluster-toggle-wrap { position: relative; }
+
+.cluster-toggle {
+    background: var(--bg);
+    color: var(--cyan);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+    display: flex;
     align-items: center;
     gap: 4px;
-    padding: 3px 10px;
-    border-radius: 4px;
+}
+.cluster-toggle:hover { background: var(--bg-hover); }
+.toggle-arrow { font-size: 8px; }
+
+.cluster-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    background: var(--bg-card);
     border: 1px solid var(--border);
-    text-decoration: none;
+    border-radius: 6px;
+    z-index: 300;
+    width: 320px;
+    max-height: 50vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+.cluster-dropdown.hidden { display: none; }
+
+.cluster-search {
+    padding: 8px 12px;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
     color: var(--text);
-    transition: background 0.15s;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    outline: none;
+    border-radius: 6px 6px 0 0;
 }
 
-.cluster-node:hover { background: var(--bg-hover); }
-.cluster-node.current { border-color: var(--cyan); background: var(--bg-hover); }
-.cluster-node.offline { opacity: 0.5; }
+.cluster-list {
+    overflow-y: auto;
+    max-height: calc(50vh - 40px);
+}
+
+.cluster-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    text-decoration: none;
+    color: var(--text);
+    border-bottom: 1px solid rgba(48, 54, 61, 0.2);
+    font-size: 12px;
+    transition: background 0.1s;
+}
+.cluster-item:hover { background: var(--bg-hover); }
+.cluster-item.current { background: var(--bg-hover); border-left: 2px solid var(--cyan); }
 
 .cn-dot {
     width: 6px;
@@ -180,7 +236,7 @@ body {
 .cn-wk { background: rgba(63, 185, 80, 0.15); color: var(--green); }
 
 .cn-name { font-weight: 500; }
-.cn-ip { color: var(--text-dim); }
+.cn-ip { color: var(--text-dim); margin-left: auto; }
 
 /* Role badge */
 .role-badge {
