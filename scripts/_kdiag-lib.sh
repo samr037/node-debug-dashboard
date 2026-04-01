@@ -44,31 +44,55 @@ k8s_api() {
         "${K8S_API}${path}" "$@" 2>/dev/null
 }
 
+# Resolve etcd cert paths (Talos vs kubeadm)
+_resolve_etcd_certs() {
+    # Talos: /host/system/secrets/etcd/
+    if [ -f "/host/system/secrets/etcd/ca.crt" ]; then
+        ETCD_CA="/host/system/secrets/etcd/ca.crt"
+        ETCD_CERT="/host/system/secrets/etcd/admin.crt"
+        ETCD_KEY="/host/system/secrets/etcd/admin.key"
+        return 0
+    fi
+    # kubeadm: /host/etc/kubernetes/pki/etcd/
+    if [ -f "/host/etc/kubernetes/pki/etcd/ca.crt" ]; then
+        ETCD_CA="/host/etc/kubernetes/pki/etcd/ca.crt"
+        ETCD_CERT="/host/etc/kubernetes/pki/etcd/server.crt"
+        ETCD_KEY="/host/etc/kubernetes/pki/etcd/server.key"
+        return 0
+    fi
+    return 1
+}
+
 # Etcd API via the host etcd (CP nodes only)
-# Uses client certs from /host/etc/kubernetes/pki/etcd/
 etcd_api() {
     local path="$1"; shift
-    local etcd_cert="/host/etc/kubernetes/pki/etcd/server.crt"
-    local etcd_key="/host/etc/kubernetes/pki/etcd/server.key"
-    local etcd_ca="/host/etc/kubernetes/pki/etcd/ca.crt"
 
-    if [ ! -f "$etcd_cert" ]; then
+    if ! _resolve_etcd_certs; then
         echo '{"error":"not a control plane node or etcd certs not found"}'
         return 1
     fi
 
     curl -sk --max-time 10 \
-        --cert "$etcd_cert" \
-        --key "$etcd_key" \
-        --cacert "$etcd_ca" \
+        --cert "$ETCD_CERT" \
+        --key "$ETCD_KEY" \
+        --cacert "$ETCD_CA" \
         "https://127.0.0.1:2379${path}" "$@" 2>/dev/null
 }
 
 # Check if this is a control plane node
 is_control_plane() {
+    [ -f "/host/system/secrets/etcd/ca.crt" ] || \
     [ -f "/host/etc/kubernetes/pki/etcd/ca.crt" ] || \
     [ -f "/host/etc/kubernetes/manifests/kube-apiserver.yaml" ]
 }
+
+# Resolve K8s PKI cert directory
+K8S_PKI_DIR=""
+if [ -d "/host/system/secrets/kubernetes" ]; then
+    K8S_PKI_DIR="/host/system/secrets/kubernetes"
+elif [ -d "/host/etc/kubernetes/pki" ]; then
+    K8S_PKI_DIR="/host/etc/kubernetes/pki"
+fi
 
 # Format bytes to human readable
 human_bytes() {
