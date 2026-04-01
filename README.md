@@ -39,6 +39,22 @@
 
 ![Kubernetes & Containers (Worker)](docs/screenshots/kubernetes-containers-dark.png)
 
+### SSH Debug Shell
+
+![MOTD](docs/screenshots/ssh-motd.png)
+
+| Node Health & Resources | etcd Deep Dive (CP) |
+|---|---|
+| ![kdiag-node](docs/screenshots/ssh-kdiag-node.png) | ![kdiag-etcd](docs/screenshots/ssh-kdiag-etcd.png) |
+
+| Certificate Audit | Service Connectivity |
+|---|---|
+| ![kdiag-certs](docs/screenshots/ssh-kdiag-certs.png) | ![kdiag-services](docs/screenshots/ssh-kdiag-services.png) |
+
+| Pod List | CPU & Memory Diagnostics |
+|---|---|
+| ![kdiag-pods](docs/screenshots/ssh-kdiag-pods.png) | ![ndiag-hw](docs/screenshots/ssh-ndiag-hw.png) |
+
 ## Architecture
 
 ### System Overview
