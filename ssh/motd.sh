@@ -61,8 +61,9 @@ if nsenter --target 1 --mount --uts --ipc --net --pid -- nvidia-smi --query-gpu=
     GPU_INFO="$gpu_line"
 fi
 
-# Dashboard URL
-DASH_IP=$(ip -4 addr show 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d/ -f1 | head -1)
+# Dashboard URL — prefer 192.168.x IPs over link-local/pod CIDRs
+DASH_IP=$(ip -4 addr show 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d/ -f1 | grep '^192\.168\.' | head -1)
+[ -z "$DASH_IP" ] && DASH_IP=$(ip -4 addr show 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | grep -v '169.254' | grep -v '10.244' | awk '{print $2}' | cut -d/ -f1 | head -1)
 
 # Print node info
 echo -e "${C_BOLD}${C_CYAN}  Node${C_RESET}        ${C_WHITE}${HOSTNAME}${C_RESET} ${C_DIM}(${K8S_NODE})${C_RESET}"
