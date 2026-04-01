@@ -124,7 +124,7 @@ alias dfu='df -h | grep -v tmpfs | grep -v overlay'
 alias dfi='df -ih | grep -v tmpfs | grep -v overlay'
 alias lsblk='lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL'
 alias smart='smartctl -a'
-alias smartall='for d in $(lsblk -dno NAME | grep -E "^sd|^nvme"); do echo "=== $d ==="; smartctl -H /host/dev/$d 2>/dev/null; done'
+alias smartall='for d in $(lsblk -dno NAME | grep -E "^sd|^nvme"); do echo "=== $d ==="; smartctl -H /dev/$d 2>/dev/null; done'
 
 # ─── Logs ===
 alias dmesg='dmesg -T --color=always'
