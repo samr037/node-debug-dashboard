@@ -139,13 +139,20 @@ cmd_sa() {
         return
     fi
 
-    # JWT decode (header.payload.signature)
-    local payload
-    payload=$(cat "$token_file" | cut -d. -f2 | base64 -d 2>/dev/null || cat "$token_file" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null)
+    # JWT decode (header.payload.signature) — base64url needs padding
+    local raw_payload payload
+    raw_payload=$(cat "$token_file" | cut -d. -f2 | tr '_-' '/+')
+    # Add padding
+    case $((${#raw_payload} % 4)) in
+        2) raw_payload="${raw_payload}==" ;;
+        3) raw_payload="${raw_payload}=" ;;
+    esac
+    payload=$(echo "$raw_payload" | base64 -d 2>/dev/null) || { fail "Failed to decode JWT"; return; }
 
+    # K8s tokens use either flat keys or nested "kubernetes.io" object
     local sa_name sa_ns exp_epoch now_epoch days_left iat
-    sa_name=$(echo "$payload" | jq -r '.["kubernetes.io/serviceaccount/service-account.name"] // "?"' 2>/dev/null)
-    sa_ns=$(echo "$payload" | jq -r '.["kubernetes.io/serviceaccount/namespace"] // "?"' 2>/dev/null)
+    sa_name=$(echo "$payload" | jq -r '(.["kubernetes.io"].serviceaccount.name // .["kubernetes.io/serviceaccount/service-account.name"]) // "?"' 2>/dev/null)
+    sa_ns=$(echo "$payload" | jq -r '(.["kubernetes.io"].namespace // .["kubernetes.io/serviceaccount/namespace"]) // "?"' 2>/dev/null)
     exp_epoch=$(echo "$payload" | jq -r '.exp // 0' 2>/dev/null)
     iat=$(echo "$payload" | jq -r '.iat // 0' 2>/dev/null)
     now_epoch=$(date +%s)
