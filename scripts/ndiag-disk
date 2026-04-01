@@ -17,7 +17,8 @@ header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
 
 cmd_health() {
     header "SMART Health Summary"
-    local disks=$(lsblk -dno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}')
+    # Only real disks with non-zero size, skip virtual/loop
+    local disks=$(lsblk -dno NAME,TYPE,SIZE 2>/dev/null | awk '$2=="disk" && $3!="0B" && $3!="0"{print $1}')
 
     if [ -z "$disks" ]; then
         echo -e "  ${C_DIM}No disks found${C_RESET}"
@@ -29,8 +30,16 @@ cmd_health() {
         local model=$(lsblk -dno MODEL "/dev/${disk}" 2>/dev/null | xargs)
         local size=$(lsblk -dno SIZE "/dev/${disk}" 2>/dev/null)
 
+        # Skip virtual disks (Longhorn, CSI) — no model or "VIRTUAL"
+        [[ -z "$model" || "$model" == *VIRTUAL* || "$model" == *"Storage Device"* ]] && continue
+
+        # Try default smartctl, fall back to -d sat for USB bridges
         local smart=$(smartctl -H "$dev" 2>/dev/null)
         local health=$(echo "$smart" | grep -iE "SMART overall|SMART Health" | awk -F: '{print $2}' | xargs)
+        if [ -z "$health" ]; then
+            smart=$(smartctl -H -d sat "$dev" 2>/dev/null)
+            health=$(echo "$smart" | grep -iE "SMART overall|SMART Health" | awk -F: '{print $2}' | xargs)
+        fi
 
         local color="$C_GREEN"
         local icon="✓"
@@ -42,8 +51,9 @@ cmd_health() {
 
         printf "  ${color}${icon}${C_RESET} %-8s %-30s %6s  ${color}%s${C_RESET}\n" "$disk" "$model" "$size" "$health"
 
-        # Key SMART attributes
+        # Key SMART attributes — try both default and -d sat
         local output=$(smartctl -A "$dev" 2>/dev/null)
+        [ -z "$output" ] && output=$(smartctl -A -d sat "$dev" 2>/dev/null)
         if [ -n "$output" ]; then
             echo "$output" | grep -iE "Reallocated|Pending|Uncorrectable|Wear_Leveling|Power_On_Hours|Temperature" | \
                 awk '{
