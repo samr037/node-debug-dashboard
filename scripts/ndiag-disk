@@ -67,8 +67,18 @@ _parse_ata_smart() {
     [ -z "$avg_erase" ] && avg_erase=$(_ata_raw Average_PE_Cycles_TLC)
     [ -z "$avg_erase" ] && avg_erase=$(_ata_raw Block_Erase_Count)
     local host_writes=$(_ata_raw Host_Writes_GiB)
-    [ -z "$host_writes" ] && host_writes=$(_ata_raw Total_LBAs_Written)
     local host_reads=$(_ata_raw Host_Reads_GiB)
+    # Total_LBAs_Written is in 512-byte sectors — convert to TiB
+    if [ -z "$host_writes" ]; then
+        local lba_written=$(_ata_raw Total_LBAs_Written)
+        if [ -n "$lba_written" ] && [ "$lba_written" -gt 0 ] 2>/dev/null; then
+            host_writes=$(awk "BEGIN{printf \"%.1f\", $lba_written * 512 / 1099511627776}") || true
+            host_writes="${host_writes} TiB"
+        fi
+    else
+        host_writes="${host_writes} GiB"
+    fi
+    [ -n "$host_reads" ] && host_reads="${host_reads} GiB"
     local nand_writes=$(_ata_raw NAND_GB_Written_TLC)
     local prog_fail=$(_ata_raw Program_Fail_Count)
     local erase_fail=$(_ata_raw Erase_Fail_Count)
@@ -98,8 +108,8 @@ _parse_ata_smart() {
     # SSD wear
     _smart_attr "Lifetime Remaining" "$lifetime" "%" "20" "5" "1"
     _smart_attr "Avg Erase Cycles" "$avg_erase" ""
-    _smart_attr "Host Writes" "$host_writes" " GiB"
-    _smart_attr "Host Reads" "$host_reads" " GiB"
+    _smart_attr "Host Writes" "$host_writes" ""
+    _smart_attr "Host Reads" "$host_reads" ""
     _smart_attr "NAND Writes" "$nand_writes" " GiB"
     _smart_attr "Program Fail" "$prog_fail" "" "0" "1"
     _smart_attr "Erase Fail" "$erase_fail" "" "0" "1"
@@ -203,7 +213,7 @@ cmd_health() {
         fi
 
         local disk_type="HDD"
-        local rota=$(lsblk -dno ROTA "/dev/${disk}" 2>/dev/null)
+        local rota=$(lsblk -dno ROTA "/dev/${disk}" 2>/dev/null | xargs)
         [ "$rota" = "0" ] && disk_type="SSD"
         [ "$is_nvme" = "1" ] && disk_type="NVMe"
 
