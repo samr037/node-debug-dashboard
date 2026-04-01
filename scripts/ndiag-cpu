@@ -5,6 +5,8 @@
 
 set -euo pipefail
 
+RAW=0
+
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
 C_CYAN="\033[36m"
@@ -17,6 +19,11 @@ HOST_PROC="${HOST_PROC:-/host-proc}"
 header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
 
 cmd_top() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: ps aux sorted by CPU ###"
+        ps aux --sort=-%cpu | head -20
+        return
+    fi
     header "Top CPU Consumers"
     echo -e "${C_DIM}  PID     USER      %CPU  %MEM  COMMAND${C_RESET}"
     ps -eo pid,user,%cpu,%mem,comm --sort=-%cpu 2>/dev/null | head -16 | tail -15 | \
@@ -26,6 +33,22 @@ cmd_top() {
 }
 
 cmd_freq() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: /proc/cpuinfo frequencies ###"
+        cat ${HOST_PROC}/cpuinfo | grep -E "processor|cpu MHz"
+        echo ""
+        echo "### raw: cpufreq scaling files ###"
+        local cpu_dir="/host/sys/devices/system/cpu"
+        [ -d "$cpu_dir" ] || cpu_dir="${HOST_PROC}/../host/sys/devices/system/cpu"
+        for cpudir in "${cpu_dir}"/cpu[0-9]*/cpufreq; do
+            [ -d "$cpudir" ] || continue
+            echo "--- $(dirname "$cpudir" | xargs basename) ---"
+            for f in scaling_cur_freq scaling_max_freq scaling_governor; do
+                [ -f "$cpudir/$f" ] && echo "$f: $(cat "$cpudir/$f")"
+            done
+        done
+        return
+    fi
     header "CPU Frequency"
     local cpu_dir="${HOST_PROC}/../host/sys/devices/system/cpu"
     if [ -d "/host/sys/devices/system/cpu" ]; then
@@ -62,6 +85,14 @@ cmd_freq() {
 }
 
 cmd_load() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: /proc/loadavg ###"
+        cat ${HOST_PROC}/loadavg
+        echo ""
+        echo "### raw: /proc/stat (first line) ###"
+        cat ${HOST_PROC}/stat | head -1
+        return
+    fi
     header "Load Average"
     local loadavg=$(cat "${HOST_PROC}/loadavg" 2>/dev/null)
     local ncpu=$(grep -c ^processor "${HOST_PROC}/cpuinfo" 2>/dev/null || echo 1)
@@ -99,6 +130,14 @@ cmd_load() {
 }
 
 cmd_throttle() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: thermal zone temps ###"
+        find /host/sys/class/thermal -name temp -exec sh -c 'echo "{}:"; cat "{}"' \; 2>/dev/null || echo "(no thermal zones)"
+        echo ""
+        echo "### raw: dmesg throttle messages ###"
+        dmesg 2>/dev/null | grep -i throttl || echo "(none)"
+        return
+    fi
     header "Thermal Throttling Check"
 
     # Check thermal zones
@@ -149,10 +188,14 @@ SUBCOMMANDS
     throttle   Thermal zones, trip points, and dmesg throttle events
     all        Run all of the above
 
+OPTIONS
+    --raw, -r  Output raw underlying commands (no formatting/colors)
+
 EXAMPLES
     ndiag-cpu load       # Quick load check
     ndiag-cpu freq       # See if CPU is scaling down
     ndiag-cpu all        # Full CPU diagnostic report
+    ndiag-cpu --raw all  # Raw output for scripting
     ndiag-cpu all | less # Paginated output
 
 NOTES
@@ -161,6 +204,9 @@ NOTES
     - Run inside the Node Debug Dashboard pod (privileged + hostPID)
 EOF
 }
+
+# Parse --raw flag
+[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
 
 case "${1:-all}" in
     top)      cmd_top ;;

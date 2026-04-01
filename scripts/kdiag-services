@@ -5,8 +5,14 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "${SCRIPT_DIR}/_kdiag-lib.sh"
+RAW=0
 
 cmd_list() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: k8s services JSON ###"
+        k8s_api "/api/v1/services" | jq .
+        return
+    fi
     header "Cluster Services"
     local svcs
     svcs=$(k8s_api "/api/v1/services")
@@ -42,6 +48,17 @@ cmd_list() {
 }
 
 cmd_dns() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: dig kubernetes.default.svc.cluster.local ###"
+        dig kubernetes.default.svc.cluster.local 2>/dev/null || echo "(dig not available)"
+        echo ""
+        echo "### raw: dig google.com ###"
+        dig google.com 2>/dev/null || echo "(dig not available)"
+        echo ""
+        echo "### raw: /etc/resolv.conf ###"
+        cat /etc/resolv.conf
+        return
+    fi
     header "Kubernetes DNS Resolution"
 
     # CoreDNS pod check
@@ -98,6 +115,11 @@ cmd_dns() {
 }
 
 cmd_endpoints() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: k8s endpoints JSON ###"
+        k8s_api "/api/v1/endpoints" | jq .
+        return
+    fi
     header "Service Endpoints Health"
 
     # Get services with their endpoints for key namespaces
@@ -241,11 +263,15 @@ SUBCOMMANDS
     connectivity   Connectivity test: apiserver, CoreDNS, etcd, kubelet, internet
     all            Run dns + endpoints + connectivity
 
+OPTIONS
+    --raw, -r  Output raw underlying commands (no formatting/colors)
+
 EXAMPLES
     kdiag-services dns          # DNS broken?
     kdiag-services endpoints    # Which services have no backends?
     kdiag-services connectivity # Full connectivity matrix
     kdiag-services list         # What services exist?
+    kdiag-services --raw list   # Raw JSON from K8s API
 
 NOTES
     - dns tests use the cluster DNS IP from /etc/resolv.conf
@@ -254,6 +280,9 @@ NOTES
     - For deeper DNS debugging: dig +trace <domain>
 EOF
 }
+
+# Parse --raw flag
+[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
 
 case "${1:-all}" in
     list)         cmd_list ;;
