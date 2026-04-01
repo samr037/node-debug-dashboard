@@ -112,7 +112,7 @@ cmd_dimms() {
             "Memory Device")
                 # Print previous device if it had a size
                 if [ -n "$size" ] && [ "$size" != "No Module Installed" ]; then
-                    echo -e "  ${C_BOLD}${loc}${C_RESET}  ${C_WHITE}${size}${C_RESET}  ${type}  ${speed}"
+                    echo -e "  ${C_BOLD}${loc}${C_RESET}  ${C_BOLD}${size}${C_RESET}  ${type}  ${speed}"
                     [ -n "$mfr" ] && echo -e "    ${C_DIM}Manufacturer:${C_RESET}  $mfr"
                     [ -n "$part" ] && echo -e "    ${C_DIM}Part Number:${C_RESET}   $part"
                     [ -n "$serial" ] && echo -e "    ${C_DIM}Serial:${C_RESET}        $serial"
@@ -146,7 +146,7 @@ cmd_dimms() {
 
     # Print last device
     if [ -n "$size" ] && [ "$size" != "No Module Installed" ]; then
-        echo -e "  ${C_BOLD}${loc}${C_RESET}  ${C_WHITE}${size}${C_RESET}  ${type}  ${speed}"
+        echo -e "  ${C_BOLD}${loc}${C_RESET}  ${C_BOLD}${size}${C_RESET}  ${type}  ${speed}"
         [ -n "$mfr" ] && echo -e "    ${C_DIM}Manufacturer:${C_RESET}  $mfr"
         [ -n "$part" ] && echo -e "    ${C_DIM}Part Number:${C_RESET}   $part"
         [ -n "$serial" ] && echo -e "    ${C_DIM}Serial:${C_RESET}        $serial"
