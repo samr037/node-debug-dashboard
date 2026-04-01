@@ -15,6 +15,153 @@ C_DIM="\033[2m"
 
 header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
 
+_smart_attr() {
+    # Print a SMART attribute with color coding
+    # Usage: _smart_attr "Label" "value" "unit" "warn_threshold" "crit_threshold" "invert"
+    local label="$1" val="$2" unit="${3:-}" warn="${4:-}" crit="${5:-}" invert="${6:-}"
+    [ -z "$val" ] || [ "$val" = "0" ] && return
+    local color="$C_DIM"
+    if [ -n "$crit" ] && [ "$val" -gt "$crit" ] 2>/dev/null; then
+        color="$C_RED"
+    elif [ -n "$warn" ] && [ "$val" -gt "$warn" ] 2>/dev/null; then
+        color="$C_YELLOW"
+    fi
+    # Invert: lower is worse (e.g., Available_Spare)
+    if [ "$invert" = "1" ] && [ -n "$warn" ]; then
+        color="$C_DIM"
+        [ "$val" -lt "$warn" ] 2>/dev/null && color="$C_YELLOW"
+        [ -n "$crit" ] && [ "$val" -lt "$crit" ] 2>/dev/null && color="$C_RED"
+    fi
+    printf "    ${color}%-28s %s%s${C_RESET}\n" "$label" "$val" "$unit"
+}
+
+_parse_ata_smart() {
+    local dev="$1" dtype="$2"
+    local args=""
+    [ -n "$dtype" ] && args="-d $dtype"
+    local output
+    output=$(eval smartctl -A $args "$dev" 2>/dev/null) || true
+    [ -z "$output" ] && return 1
+
+    # Extract raw values by attribute name
+    _ata_raw() { echo "$output" | awk -v name="$1" '$2==name{print $10}' | head -1; }
+
+    local hours=$(_ata_raw Power_On_Hours)
+    local cycles=$(_ata_raw Power_Cycle_Count)
+    local temp=$(_ata_raw Temperature_Celsius)
+    # Clean temp (may have Min/Max suffix)
+    temp=${temp%% *}
+
+    local realloc=$(_ata_raw Reallocated_Sector_Ct)
+    [ -z "$realloc" ] && realloc=$(_ata_raw Reallocate_NAND_Blk_Cnt)
+    local realloc_ev=$(_ata_raw Reallocated_Event_Count)
+    local pending=$(_ata_raw Current_Pending_Sector)
+    [ -z "$pending" ] && pending=$(_ata_raw Current_Pending_ECC_Cnt)
+    local uncorrect=$(_ata_raw Offline_Uncorrectable)
+    local udma_err=$(_ata_raw UDMA_CRC_Error_Count)
+
+    # SSD-specific
+    local wear=$(_ata_raw Wear_Leveling_Count)
+    local lifetime=$(_ata_raw Percent_Lifetime_Remain)
+    local avg_erase=$(_ata_raw Ave_Block-Erase_Count)
+    [ -z "$avg_erase" ] && avg_erase=$(_ata_raw Average_PE_Cycles_TLC)
+    [ -z "$avg_erase" ] && avg_erase=$(_ata_raw Block_Erase_Count)
+    local host_writes=$(_ata_raw Host_Writes_GiB)
+    [ -z "$host_writes" ] && host_writes=$(_ata_raw Total_LBAs_Written)
+    local host_reads=$(_ata_raw Host_Reads_GiB)
+    local nand_writes=$(_ata_raw NAND_GB_Written_TLC)
+    local prog_fail=$(_ata_raw Program_Fail_Count)
+    local erase_fail=$(_ata_raw Erase_Fail_Count)
+    local reserve=$(_ata_raw Available_Reservd_Space)
+    [ -z "$reserve" ] && reserve=$(_ata_raw Unused_Reserve_NAND_Blk)
+    local unexp_power=$(_ata_raw Unexpected_Power_Loss)
+    [ -z "$unexp_power" ] && unexp_power=$(_ata_raw Unexpect_Power_Loss_Ct)
+
+    # HDD-specific
+    local spin_up=$(_ata_raw Spin_Up_Time)
+    local seek_err=$(_ata_raw Seek_Error_Rate)
+    local load_cycle=$(_ata_raw Load_Cycle_Count)
+    local read_err=$(_ata_raw Raw_Read_Error_Rate)
+
+    # Always show
+    _smart_attr "Power-On Hours" "$hours" "h"
+    _smart_attr "Power Cycles" "$cycles" ""
+    _smart_attr "Temperature" "$temp" "°C" "55" "70"
+
+    # Reliability (critical first)
+    _smart_attr "Reallocated Sectors" "$realloc" "" "0" "10"
+    _smart_attr "Reallocated Events" "$realloc_ev" "" "0" "5"
+    _smart_attr "Pending Sectors" "$pending" "" "0" "1"
+    _smart_attr "Uncorrectable" "$uncorrect" "" "0" "1"
+    _smart_attr "UDMA CRC Errors" "$udma_err" "" "100" "1000"
+
+    # SSD wear
+    _smart_attr "Lifetime Remaining" "$lifetime" "%" "20" "5" "1"
+    _smart_attr "Avg Erase Cycles" "$avg_erase" ""
+    _smart_attr "Host Writes" "$host_writes" " GiB"
+    _smart_attr "Host Reads" "$host_reads" " GiB"
+    _smart_attr "NAND Writes" "$nand_writes" " GiB"
+    _smart_attr "Program Fail" "$prog_fail" "" "0" "1"
+    _smart_attr "Erase Fail" "$erase_fail" "" "0" "1"
+    _smart_attr "Reserved Space" "$reserve" "%"
+    _smart_attr "Unexpected Power Loss" "$unexp_power" ""
+
+    # HDD mechanical
+    _smart_attr "Spin-Up Time" "$spin_up" "ms"
+    _smart_attr "Load Cycles" "$load_cycle" ""
+
+    return 0
+}
+
+_parse_nvme_smart() {
+    local dev="$1"
+    local output
+    output=$(smartctl -A "$dev" 2>/dev/null) || true
+    [ -z "$output" ] && return 1
+
+    # NVMe uses "Key:  Value" format
+    _nvme_val() { echo "$output" | grep -i "^$1" | head -1 | awk -F: '{gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2}'; }
+
+    local temp=$(_nvme_val "Temperature:")
+    temp=${temp%% *}  # strip " Celsius"
+    local spare=$(_nvme_val "Available Spare:")
+    spare=${spare%%%}  # strip %
+    local spare_thresh=$(_nvme_val "Available Spare Threshold:")
+    spare_thresh=${spare_thresh%%%}
+    local pct_used=$(_nvme_val "Percentage Used:")
+    pct_used=${pct_used%%%}
+    local data_read=$(_nvme_val "Data Units Read:")
+    local data_written=$(_nvme_val "Data Units Written:")
+    local hours=$(_nvme_val "Power On Hours:")
+    hours=$(echo "$hours" | tr -d ',')
+    local cycles=$(_nvme_val "Power Cycles:")
+    cycles=$(echo "$cycles" | tr -d ',')
+    local unsafe=$(_nvme_val "Unsafe Shutdowns:")
+    unsafe=$(echo "$unsafe" | tr -d ',')
+    local integrity=$(_nvme_val "Media and Data Integrity Errors:")
+    integrity=$(echo "$integrity" | tr -d ',')
+    local errors=$(_nvme_val "Error Information Log Entries:")
+    errors=$(echo "$errors" | tr -d ',')
+    local warn_temp=$(_nvme_val "Warning.*Comp.*Temp.*Time:")
+    local crit_temp=$(_nvme_val "Critical.*Comp.*Temp.*Time:")
+
+    _smart_attr "Power-On Hours" "$hours" "h"
+    _smart_attr "Power Cycles" "$cycles" ""
+    _smart_attr "Temperature" "$temp" "°C" "60" "75"
+    _smart_attr "Available Spare" "$spare" "%" "20" "10" "1"
+    _smart_attr "Spare Threshold" "$spare_thresh" "%"
+    _smart_attr "Percentage Used" "$pct_used" "%" "80" "95"
+    _smart_attr "Data Written" "$data_written" ""
+    _smart_attr "Data Read" "$data_read" ""
+    _smart_attr "Unsafe Shutdowns" "$unsafe" "" "50" "200"
+    _smart_attr "Integrity Errors" "$integrity" "" "0" "1"
+    _smart_attr "Error Log Entries" "$errors" ""
+    _smart_attr "Warning Temp Time" "$warn_temp" "" "0" "1"
+    _smart_attr "Critical Temp Time" "$crit_temp" "" "0" "1"
+
+    return 0
+}
+
 cmd_health() {
     header "SMART Health Summary"
     # Only real disks with non-zero size, skip virtual/loop
@@ -33,10 +180,16 @@ cmd_health() {
         # Skip virtual disks (Longhorn, CSI) — no model or "VIRTUAL"
         [[ -z "$model" || "$model" == *VIRTUAL* || "$model" == *"Storage Device"* ]] && continue
 
-        # Try default smartctl, fall back to -d sat for USB bridges
+        # Detect disk type
+        local is_nvme=0
+        [[ "$disk" == nvme* ]] && is_nvme=1
+
+        # Get health status — try default, then -d sat for USB bridges
+        local dtype=""
         local smart=$(smartctl -H "$dev" 2>/dev/null) || true
         local health=$(echo "$smart" | grep -iE "SMART overall|SMART Health" | awk -F: '{print $2}' | xargs) || true
-        if [ -z "$health" ]; then
+        if [ -z "$health" ] && [ "$is_nvme" = "0" ]; then
+            dtype="sat"
             smart=$(smartctl -H -d sat "$dev" 2>/dev/null) || true
             health=$(echo "$smart" | grep -iE "SMART overall|SMART Health" | awk -F: '{print $2}' | xargs) || true
         fi
@@ -49,20 +202,19 @@ cmd_health() {
             color="$C_RED"; icon="✗"
         fi
 
-        printf "  ${color}${icon}${C_RESET} %-8s %-30s %6s  ${color}%s${C_RESET}\n" "$disk" "$model" "$size" "$health"
+        local disk_type="HDD"
+        local rota=$(lsblk -dno ROTA "/dev/${disk}" 2>/dev/null)
+        [ "$rota" = "0" ] && disk_type="SSD"
+        [ "$is_nvme" = "1" ] && disk_type="NVMe"
 
-        # Key SMART attributes — try both default and -d sat
-        local output=$(smartctl -A "$dev" 2>/dev/null) || true
-        [ -z "$output" ] && output=$(smartctl -A -d sat "$dev" 2>/dev/null) || true
-        if [ -n "$output" ]; then
-            echo "$output" | grep -iE "Reallocated|Pending|Uncorrectable|Wear_Leveling|Power_On_Hours|Temperature" | \
-                awk '{
-                    val=$10; name=$2
-                    if (name ~ /Reallocated/ && val+0 > 0) color="\033[31m"
-                    else if (name ~ /Pending/ && val+0 > 0) color="\033[33m"
-                    else color="\033[2m"
-                    printf "    %s%-30s %s\033[0m\n", color, name, val
-                }' || true
+        printf "  ${color}${icon}${C_RESET} ${C_BOLD}%-8s${C_RESET} %-30s %6s  ${color}%s${C_RESET}  ${C_DIM}[%s]${C_RESET}\n" \
+            "$disk" "$model" "$size" "$health" "$disk_type"
+
+        # Parse and display attributes
+        if [ "$is_nvme" = "1" ]; then
+            _parse_nvme_smart "$dev"
+        else
+            _parse_ata_smart "$dev" "$dtype"
         fi
         echo ""
     done
