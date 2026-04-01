@@ -5,6 +5,8 @@
 
 set -euo pipefail
 
+RAW=0
+
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
 C_CYAN="\033[36m"
@@ -173,6 +175,17 @@ _parse_nvme_smart() {
 }
 
 cmd_health() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: smartctl -a for each disk ###"
+        local disks=$(lsblk -dno NAME,TYPE,SIZE 2>/dev/null | awk '$2=="disk" && $3!="0B" && $3!="0"{print $1}')
+        for disk in $disks; do
+            local dev="/dev/${disk}"
+            echo "--- smartctl -a $dev ---"
+            smartctl -a "$dev" 2>/dev/null || smartctl -a -d sat "$dev" 2>/dev/null || echo "(SMART not available for $dev)"
+            echo ""
+        done
+        return
+    fi
     header "SMART Health Summary"
     # Only real disks with non-zero size, skip virtual/loop
     local disks=$(lsblk -dno NAME,TYPE,SIZE 2>/dev/null | awk '$2=="disk" && $3!="0B" && $3!="0"{print $1}')
@@ -231,6 +244,11 @@ cmd_health() {
 }
 
 cmd_io() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: iostat -x 1 2 ###"
+        iostat -x 1 2 2>/dev/null || echo "(iostat not available)"
+        return
+    fi
     header "I/O Statistics"
 
     # Current I/O from /proc/diskstats (skip loop devices)
@@ -262,6 +280,14 @@ cmd_io() {
 }
 
 cmd_usage() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: df -h ###"
+        df -h
+        echo ""
+        echo "### raw: df -ih ###"
+        df -ih
+        return
+    fi
     header "Disk Space Usage"
     echo -e "${C_DIM}  FILESYSTEM                    SIZE   USED  AVAIL  USE%  MOUNT${C_RESET}"
     df -h 2>/dev/null | grep -vE 'tmpfs|overlay|shm|Filesystem|^none|^rootfs' | sort -k5 -rn | \
@@ -324,10 +350,14 @@ SUBCOMMANDS
     bench      Quick 256MB sequential read/write benchmark
     all        Run health + usage + io
 
+OPTIONS
+    --raw, -r  Output raw underlying commands (no formatting/colors)
+
 EXAMPLES
     ndiag-disk health       # Quick SMART check
     ndiag-disk usage        # Disk space overview
     ndiag-disk bench        # Sequential I/O speed
+    ndiag-disk --raw health # Raw smartctl output
     ndiag-disk all | less   # Full report
 
 NOTES
@@ -337,6 +367,9 @@ NOTES
     - For fio benchmarks: fio --name=test --bs=4k --rw=randread --size=128M
 EOF
 }
+
+# Parse --raw flag
+[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
 
 case "${1:-all}" in
     health)  cmd_health ;;

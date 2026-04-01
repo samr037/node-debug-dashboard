@@ -5,6 +5,8 @@
 
 set -euo pipefail
 
+RAW=0
+
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
 C_CYAN="\033[36m"
@@ -16,6 +18,18 @@ C_DIM="\033[2m"
 header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
 
 cmd_ifaces() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: ip -s addr ###"
+        ip -s addr
+        echo ""
+        echo "### raw: ethtool per interface ###"
+        for iface in /host/sys/class/net/*; do
+            local name=$(basename "$iface")
+            echo "--- ethtool $name ---"
+            ethtool "$name" 2>/dev/null || echo "(not available)"
+        done
+        return
+    fi
     header "Network Interfaces"
     echo -e "${C_DIM}  IFACE           STATE    MTU   IP ADDRESS               MAC${C_RESET}"
 
@@ -64,6 +78,11 @@ cmd_ifaces() {
 }
 
 cmd_conns() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: ss -tnp ###"
+        ss -tnp
+        return
+    fi
     header "Active Connections (top 30)"
     echo -e "${C_DIM}  PROTO  LOCAL                    REMOTE                   STATE        PID/PROGRAM${C_RESET}"
     ss -tnp 2>/dev/null | tail -n +2 | head -30 | awk '{
@@ -79,6 +98,14 @@ cmd_conns() {
 }
 
 cmd_listen() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: ss -tlnp (TCP) ###"
+        ss -tlnp
+        echo ""
+        echo "### raw: ss -ulnp (UDP) ###"
+        ss -ulnp
+        return
+    fi
     header "Listening Ports"
     echo -e "${C_DIM}  PROTO  ADDRESS                  PORT   PID/PROGRAM${C_RESET}"
     (ss -tlnp 2>/dev/null; ss -ulnp 2>/dev/null) | tail -n +2 | sort -t: -k2 -n | \
@@ -94,6 +121,17 @@ cmd_listen() {
 }
 
 cmd_dns() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: dig google.com ###"
+        dig google.com 2>/dev/null || echo "(dig not available)"
+        echo ""
+        echo "### raw: dig kubernetes.default.svc ###"
+        dig kubernetes.default.svc 2>/dev/null || echo "(dig not available)"
+        echo ""
+        echo "### raw: /etc/resolv.conf ###"
+        cat /etc/resolv.conf
+        return
+    fi
     header "DNS Resolution Tests"
     local tests=("google.com" "kubernetes.default.svc" "1.1.1.1")
     for target in "${tests[@]}"; do
@@ -114,6 +152,14 @@ cmd_dns() {
 }
 
 cmd_reach() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: curl -v https://1.1.1.1 ###"
+        curl -v https://1.1.1.1 2>&1 | head -20 || true
+        echo ""
+        echo "### raw: ping -c1 8.8.8.8 ###"
+        ping -c1 8.8.8.8 2>&1 || true
+        return
+    fi
     header "Connectivity Checks"
 
     # Internet
@@ -191,10 +237,14 @@ SUBCOMMANDS
     capture    Quick 50-packet tcpdump capture
     all        Run ifaces + conns + listen + dns + reach
 
+OPTIONS
+    --raw, -r  Output raw underlying commands (no formatting/colors)
+
 EXAMPLES
     ndiag-net listen          # What's listening?
     ndiag-net reach           # Is the node healthy?
     ndiag-net capture         # Quick traffic sample
+    ndiag-net --raw dns       # Raw DNS output for scripting
     ndiag-net ifaces | less   # Detailed interface report
 
 NOTES
@@ -203,6 +253,9 @@ NOTES
     - For tshark analysis: tshark -i any -c 100 -w /tmp/cap.pcap
 EOF
 }
+
+# Parse --raw flag
+[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
 
 case "${1:-all}" in
     ifaces)  cmd_ifaces ;;

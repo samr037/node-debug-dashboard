@@ -5,6 +5,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "${SCRIPT_DIR}/_kdiag-lib.sh"
+RAW=0
 
 _check_cp() {
     if ! is_control_plane; then
@@ -16,6 +17,14 @@ _check_cp() {
 
 cmd_health() {
     _check_cp
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: etcd /health ###"
+        etcd_api "/health" | jq .
+        echo ""
+        echo "### raw: etcd /version ###"
+        etcd_api "/version" | jq .
+        return
+    fi
     header "etcd Health"
 
     local health
@@ -52,6 +61,11 @@ cmd_health() {
 
 cmd_members() {
     _check_cp
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: etcd member list ###"
+        etcd_api "/v3/cluster/member/list" -X POST -d '{}' | jq .
+        return
+    fi
     header "etcd Members"
 
     local members
@@ -81,6 +95,11 @@ cmd_members() {
 
 cmd_size() {
     _check_cp
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: etcd maintenance status ###"
+        etcd_api "/v3/maintenance/status" -X POST -d '{}' | jq .
+        return
+    fi
     header "etcd Database Size"
 
     local status
@@ -121,6 +140,11 @@ cmd_size() {
 
 cmd_alarms() {
     _check_cp
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: etcd alarms ###"
+        etcd_api "/v3/maintenance/alarm" -X POST -d '{"action":"GET"}' | jq .
+        return
+    fi
     header "etcd Alarms"
 
     local alarms
@@ -248,11 +272,15 @@ SUBCOMMANDS
     keys        Key count by /registry/* prefix
     all         Run all of the above
 
+OPTIONS
+    --raw, -r  Output raw underlying commands (no formatting/colors)
+
 EXAMPLES
     kdiag-etcd health       # Quick health check
     kdiag-etcd size         # DB growing too fast?
     kdiag-etcd perf         # Latency benchmark
     kdiag-etcd keys         # What's filling etcd?
+    kdiag-etcd --raw health # Raw etcd API JSON
     kdiag-etcd all | less   # Full diagnostic
 
 NOTES
@@ -262,6 +290,9 @@ NOTES
     - Default etcd quota is 8 GB — alarm triggers at limit
 EOF
 }
+
+# Parse --raw flag
+[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
 
 case "${1:-all}" in
     health)  cmd_health ;;

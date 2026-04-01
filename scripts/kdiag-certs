@@ -5,6 +5,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "${SCRIPT_DIR}/_kdiag-lib.sh"
+RAW=0
 
 _cert_info() {
     local cert_file="$1"
@@ -74,6 +75,15 @@ _cert_info_inline() {
 }
 
 cmd_k8s() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: K8s PKI certificates ###"
+        local search_dirs=("/host/system/secrets/kubernetes" "/host/etc/kubernetes/pki")
+        for dir in "${search_dirs[@]}"; do
+            [ -d "$dir" ] || continue
+            find "$dir" -name "*.crt" -exec sh -c 'echo "--- {} ---"; openssl x509 -in "{}" -noout -subject -dates -issuer 2>/dev/null; echo ""' \;
+        done
+        return
+    fi
     header "Kubernetes PKI Certificates"
     echo -e "  ${C_DIM}STATUS  NAME                             EXPIRY  SUBJECT${C_RESET}"
 
@@ -108,6 +118,17 @@ cmd_k8s() {
 }
 
 cmd_etcd() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: etcd certificates ###"
+        local etcd_dir="/host/system/secrets/etcd"
+        [ -d "$etcd_dir" ] || etcd_dir="/host/etc/kubernetes/pki/etcd"
+        if [ -d "$etcd_dir" ]; then
+            find "$etcd_dir" -name "*.crt" -exec sh -c 'echo "--- {} ---"; openssl x509 -in "{}" -noout -subject -dates -issuer 2>/dev/null; echo ""' \;
+        else
+            echo "(etcd PKI directory not found)"
+        fi
+        return
+    fi
     header "etcd Certificates"
     echo -e "  ${C_DIM}STATUS  NAME                             EXPIRY  SUBJECT${C_RESET}"
 
@@ -131,6 +152,18 @@ cmd_etcd() {
 }
 
 cmd_sa() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: SA token JWT payload ###"
+        cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null | cut -d. -f2 | (
+            raw=$(cat)
+            case $((${#raw} % 4)) in
+                2) raw="${raw}==" ;;
+                3) raw="${raw}=" ;;
+            esac
+            echo "$raw" | tr '_-' '/+' | base64 -d 2>/dev/null | jq .
+        )
+        return
+    fi
     header "ServiceAccount Token"
 
     local token_file="/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -191,6 +224,11 @@ cmd_sa() {
 }
 
 cmd_tls() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: openssl s_client to kube-apiserver ###"
+        echo | openssl s_client -connect kubernetes.default.svc:443 2>/dev/null | openssl x509 -noout -text 2>/dev/null || echo "(connection failed)"
+        return
+    fi
     header "Live TLS Endpoints"
     echo -e "  ${C_DIM}STATUS  ENDPOINT                         EXPIRY  SUBJECT${C_RESET}"
 
@@ -228,10 +266,14 @@ SUBCOMMANDS
     tls        Live TLS endpoint cert check (apiserver, etcd, kubelet)
     all        Run all of the above
 
+OPTIONS
+    --raw, -r  Output raw underlying commands (no formatting/colors)
+
 EXAMPLES
     kdiag-certs all         # Full cert audit
     kdiag-certs sa          # Check SA token expiry
     kdiag-certs tls         # Check live endpoints
+    kdiag-certs --raw k8s   # Raw openssl cert output
 
 COLOR CODING
     ✓ green   — >90 days until expiry
@@ -245,6 +287,9 @@ NOTES
     - On worker nodes, k8s and etcd may show fewer certs
 EOF
 }
+
+# Parse --raw flag
+[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
 
 case "${1:-all}" in
     k8s)  cmd_k8s ;;

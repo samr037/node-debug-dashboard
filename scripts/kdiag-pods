@@ -5,12 +5,18 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "${SCRIPT_DIR}/_kdiag-lib.sh"
+RAW=0
 
 _get_pods() {
     k8s_api "/api/v1/pods?fieldSelector=spec.nodeName=${NODE_NAME}"
 }
 
 cmd_list() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: pods on this node JSON ###"
+        k8s_api "/api/v1/pods?fieldSelector=spec.nodeName=${NODE_NAME}" | jq .
+        return
+    fi
     header "Pods on ${NODE_NAME}"
     local pods_json
     pods_json=$(_get_pods)
@@ -44,6 +50,11 @@ cmd_list() {
 }
 
 cmd_sick() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: pods on this node JSON ###"
+        k8s_api "/api/v1/pods?fieldSelector=spec.nodeName=${NODE_NAME}" | jq .
+        return
+    fi
     header "Unhealthy Pods on ${NODE_NAME}"
     local pods_json
     pods_json=$(_get_pods)
@@ -136,6 +147,11 @@ cmd_sick() {
 }
 
 cmd_resources() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: pods on this node JSON ###"
+        k8s_api "/api/v1/pods?fieldSelector=spec.nodeName=${NODE_NAME}" | jq .
+        return
+    fi
     header "Pod Resource Usage — ${NODE_NAME}"
     local pods_json
     pods_json=$(_get_pods)
@@ -165,6 +181,11 @@ cmd_resources() {
 }
 
 cmd_images() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: pods on this node JSON ###"
+        k8s_api "/api/v1/pods?fieldSelector=spec.nodeName=${NODE_NAME}" | jq .
+        return
+    fi
     header "Container Images on ${NODE_NAME}"
     local pods_json
     pods_json=$(_get_pods)
@@ -183,6 +204,11 @@ cmd_images() {
 }
 
 cmd_logs() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: ls -la /host/var/log/pods/ ###"
+        ls -la /host/var/log/pods/ 2>/dev/null || echo "(no pod logs directory)"
+        return
+    fi
     header "Recent Pod Log Directories"
     echo -e "${C_DIM}  Sorted by most recent activity${C_RESET}"
     echo ""
@@ -194,6 +220,11 @@ cmd_logs() {
 }
 
 cmd_all() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: pods on this node JSON ###"
+        k8s_api "/api/v1/pods?fieldSelector=spec.nodeName=${NODE_NAME}" | jq .
+        return
+    fi
     cmd_list
     cmd_sick
     cmd_resources
@@ -215,10 +246,14 @@ SUBCOMMANDS
     logs        Recent pod log directories
     all         Run list + sick + resources + images
 
+OPTIONS
+    --raw, -r  Output raw underlying commands (no formatting/colors)
+
 EXAMPLES
     kdiag-pods sick          # Quick health check
     kdiag-pods resources     # Who's eating my resources?
     kdiag-pods images        # What's running?
+    kdiag-pods --raw list    # Raw JSON from K8s API
     kdiag-pods all | less    # Full pod diagnostic
 
 NOTES
@@ -227,6 +262,9 @@ NOTES
     - Resource display shows requests, not limits or actual usage
 EOF
 }
+
+# Parse --raw flag
+[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
 
 case "${1:-all}" in
     list)      cmd_list ;;
