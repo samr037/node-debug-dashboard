@@ -5,6 +5,8 @@
 
 set -euo pipefail
 
+RAW=0
+
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
 C_CYAN="\033[36m"
@@ -16,6 +18,11 @@ C_DIM="\033[2m"
 header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
 
 cmd_mounts() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: /proc/mounts ###"
+        cat ${HOST_PROC:-/host-proc}/mounts
+        return
+    fi
     header "Active Mounts"
     echo -e "${C_DIM}  DEVICE                  MOUNT                          TYPE      OPTIONS${C_RESET}"
     cat "${HOST_PROC:-/host-proc}/mounts" 2>/dev/null | grep -vE 'proc|sysfs|devpts|cgroup|tmpfs|overlay|shm|mqueue|debugfs|tracefs|securityfs|pstore|bpf|hugetlb|autofs' | \
@@ -32,6 +39,20 @@ cmd_mounts() {
 }
 
 cmd_lvm() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: pvs ###"
+        pvs 2>/dev/null || echo "(pvs not available)"
+        echo ""
+        echo "### raw: vgs ###"
+        vgs 2>/dev/null || echo "(vgs not available)"
+        echo ""
+        echo "### raw: lvs ###"
+        lvs 2>/dev/null || echo "(lvs not available)"
+        echo ""
+        echo "### raw: /proc/mdstat ###"
+        cat ${HOST_PROC:-/host-proc}/mdstat 2>/dev/null || echo "(no mdstat)"
+        return
+    fi
     header "LVM — Physical Volumes"
     pvs 2>/dev/null | sed 's/^/  /' || echo -e "  ${C_DIM}No LVM PVs found (or pvs not available)${C_RESET}"
 
@@ -53,6 +74,14 @@ cmd_lvm() {
 }
 
 cmd_fs() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: lsblk -f ###"
+        lsblk -f 2>/dev/null || echo "(lsblk not available)"
+        echo ""
+        echo "### raw: blkid ###"
+        blkid 2>/dev/null || echo "(blkid not available)"
+        return
+    fi
     header "Filesystem Details"
     echo -e "${C_DIM}  NAME         SIZE  TYPE   FSTYPE    LABEL                MOUNT${C_RESET}"
     lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null | tail -n +2 | \
@@ -72,6 +101,16 @@ cmd_fs() {
 }
 
 cmd_table() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: fdisk -l for each disk ###"
+        local disks=$(lsblk -dno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}')
+        for disk in $disks; do
+            echo "--- fdisk -l /dev/$disk ---"
+            fdisk -l "/dev/$disk" 2>/dev/null || echo "(not available)"
+            echo ""
+        done
+        return
+    fi
     header "Partition Tables"
     local disks=$(lsblk -dno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}')
 
@@ -116,11 +155,15 @@ SUBCOMMANDS
     table      GPT/MBR partition tables for all disks
     all        Run all of the above
 
+OPTIONS
+    --raw, -r  Output raw underlying commands (no formatting/colors)
+
 EXAMPLES
     ndiag-part mounts       # What's mounted where?
     ndiag-part lvm          # LVM layout
     ndiag-part fs           # Filesystem overview
     ndiag-part table        # Raw partition tables
+    ndiag-part --raw mounts # Raw /proc/mounts output
     ndiag-part all | less   # Full report
 
 NOTES
@@ -130,6 +173,9 @@ NOTES
     - Reads host mount info from /host-proc/mounts
 EOF
 }
+
+# Parse --raw flag
+[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
 
 case "${1:-all}" in
     mounts) cmd_mounts ;;

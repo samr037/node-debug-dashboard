@@ -5,8 +5,14 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "${SCRIPT_DIR}/_kdiag-lib.sh"
+RAW=0
 
 cmd_node() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: node events JSON ###"
+        k8s_api "/api/v1/events?fieldSelector=involvedObject.name=${NODE_NAME}" | jq .
+        return
+    fi
     header "Events for Node ${NODE_NAME}"
 
     local events
@@ -37,6 +43,11 @@ cmd_node() {
 }
 
 cmd_warnings() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: warning events JSON ###"
+        k8s_api "/api/v1/events?fieldSelector=type=Warning" | jq .
+        return
+    fi
     header "Cluster-Wide Warnings"
 
     local events
@@ -83,6 +94,11 @@ cmd_warnings() {
 }
 
 cmd_all_events() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: all events JSON ###"
+        k8s_api "/api/v1/events" | jq .
+        return
+    fi
     header "All Recent Events (cluster-wide)"
 
     local events
@@ -106,6 +122,11 @@ cmd_all_events() {
 
 cmd_ns() {
     local namespace="${1:-default}"
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: namespace ${namespace} events JSON ###"
+        k8s_api "/api/v1/namespaces/${namespace}/events" | jq .
+        return
+    fi
     header "Events in Namespace: ${namespace}"
 
     local events
@@ -182,11 +203,15 @@ SUBCOMMANDS
     ns <name>   Events in a specific namespace (default: "default")
     watch       Live event stream (Ctrl+C to stop)
 
+OPTIONS
+    --raw, -r  Output raw underlying commands (no formatting/colors)
+
 EXAMPLES
     kdiag-events node            # What happened to this node?
     kdiag-events warnings        # Any cluster warnings?
     kdiag-events ns kube-system  # kube-system events
     kdiag-events watch           # Live tail of all events
+    kdiag-events --raw warnings  # Raw JSON from K8s API
     kdiag-events all | less      # Browse recent events
 
 NOTES
@@ -196,6 +221,9 @@ NOTES
     - For historical events, check logging/monitoring systems
 EOF
 }
+
+# Parse --raw flag
+[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
 
 case "${1:-node}" in
     node)     cmd_node ;;

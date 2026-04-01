@@ -5,8 +5,14 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "${SCRIPT_DIR}/_kdiag-lib.sh"
+RAW=0
 
 cmd_status() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: k8s node JSON ###"
+        k8s_api "/api/v1/nodes/${NODE_NAME}" | jq .
+        return
+    fi
     header "Node Status — ${NODE_NAME}"
     local node_json
     node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}")
@@ -50,6 +56,14 @@ cmd_status() {
 }
 
 cmd_resources() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: k8s node JSON ###"
+        k8s_api "/api/v1/nodes/${NODE_NAME}" | jq .
+        echo ""
+        echo "### raw: pods on this node JSON ###"
+        k8s_api "/api/v1/pods?fieldSelector=spec.nodeName=${NODE_NAME}" | jq .
+        return
+    fi
     header "Resource Allocation — ${NODE_NAME}"
     local node_json
     node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}")
@@ -115,6 +129,11 @@ cmd_resources() {
 }
 
 cmd_taints() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: k8s node JSON (taints/labels) ###"
+        k8s_api "/api/v1/nodes/${NODE_NAME}" | jq .
+        return
+    fi
     header "Taints & Labels — ${NODE_NAME}"
     local node_json
     node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}")
@@ -139,6 +158,15 @@ cmd_taints() {
 }
 
 cmd_pressure() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: /proc/pressure/* ###"
+        for f in "${HOST_PROC}/pressure"/*; do
+            [ -f "$f" ] || continue
+            echo "--- $(basename "$f") ---"
+            cat "$f"
+        done
+        return
+    fi
     header "Resource Pressure"
 
     # CPU pressure
@@ -179,6 +207,11 @@ cmd_pressure() {
 }
 
 cmd_kubelet() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: kubelet/kube-proxy/etcd processes ###"
+        ps aux | grep -E "kubelet|kube-proxy|etcd" | grep -v grep || echo "(no matches)"
+        return
+    fi
     header "Kubelet Health"
 
     # Kubelet process
@@ -240,6 +273,11 @@ cmd_kubelet() {
 }
 
 cmd_all() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: k8s node full JSON ###"
+        k8s_api "/api/v1/nodes/${NODE_NAME}" | jq .
+        return
+    fi
     cmd_status
     cmd_resources
     cmd_taints
@@ -262,9 +300,13 @@ SUBCOMMANDS
     kubelet     Kubelet + component processes, static pods, containerd
     all         Run all of the above
 
+OPTIONS
+    --raw, -r  Output raw underlying commands (no formatting/colors)
+
 EXAMPLES
     kdiag-node status       # Quick node health check
     kdiag-node resources    # Am I overcommitted?
+    kdiag-node --raw status # Raw JSON from K8s API
     kdiag-node all | less   # Full node diagnostic
 
 NOTES
@@ -273,6 +315,9 @@ NOTES
     - PSI requires kernel 4.20+ with CONFIG_PSI=y
 EOF
 }
+
+# Parse --raw flag
+[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
 
 case "${1:-all}" in
     status)    cmd_status ;;
