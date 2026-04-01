@@ -1,0 +1,16 @@
+#compdef kdiag-etcd
+_kdiag_etcd() {
+    local -a subcommands
+    subcommands=(
+        'health:Health check, version, process info'
+        'members:Cluster members and leader'
+        'size:DB size, fragmentation, quota gauge'
+        'alarms:Active alarms'
+        'perf:Write/read latency + WAL fsync benchmark'
+        'keys:Key count by /registry/* prefix'
+        'all:Full etcd diagnostic report'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+_kdiag_etcd "$@"

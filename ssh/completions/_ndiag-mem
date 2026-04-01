@@ -1,0 +1,18 @@
+#compdef ndiag-mem
+# Zsh completion for ndiag-mem
+
+_ndiag_mem() {
+    local -a subcommands
+    subcommands=(
+        'usage:Memory usage summary with gauge'
+        'top:Top 15 memory-consuming processes'
+        'dimms:DIMM inventory (size, type, speed, ECC)'
+        'swap:Swap details and top swap consumers'
+        'oom:Recent OOM kills and memory pressure'
+        'all:Full memory diagnostic report'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+
+_ndiag_mem "$@"

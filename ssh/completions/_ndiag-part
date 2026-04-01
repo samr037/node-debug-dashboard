@@ -1,0 +1,17 @@
+#compdef ndiag-part
+# Zsh completion for ndiag-part
+
+_ndiag_part() {
+    local -a subcommands
+    subcommands=(
+        'mounts:Active mount points'
+        'lvm:LVM PVs/VGs/LVs and RAID status'
+        'fs:Filesystem tree with labels and UUIDs'
+        'table:GPT/MBR partition tables'
+        'all:Full partition diagnostic report'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+
+_ndiag_part "$@"

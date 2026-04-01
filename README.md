@@ -17,7 +17,7 @@
 - **Processes** — Top 200 host processes by memory with PID/PPID/user/CPU%/MEM%
 - **Warnings** — Aggregated alerts from SMART, temperatures, memory errors, disk usage, certificate expiry, K8s node conditions
 - **Cluster Navigation** — Searchable dropdown listing all nodes with role/status, click to jump between dashboards
-- **SSH Access** — Configurable SSH server (enable/disable, password auth, authorized keys via env vars), orange SSH badge with click-to-copy command
+- **SSH Debug Shell** — Zsh + oh-my-zsh (agnoster), vim with custom config, 11 diagnostic scripts (`ndiag-*` + `kdiag-*`), 60+ aliases, dynamic MOTD — [full SSH docs](docs/ssh.md)
 - **Themes** — Dark, Light, and Auto (follows OS preference), persists across nodes via URL params
 - **Scalable** — Tiered caching (10s/60s/5min), section-based parallel fetching, dropdown cluster bar with search
 - **Auto-refresh** — 10-second polling with persistent UI state (open sections and scroll position preserved)
@@ -339,6 +339,30 @@ app/
 │   └── app.js              # Section fetching, rendering, WebSocket, theme
 ├── entrypoint.sh           # Starts sshd (conditional) + uvicorn
 └── Dockerfile              # debian:bookworm + 200 tools + crictl + Python
+
+ssh/                        # SSH shell configuration
+├── vimrc                   # Vim config (syntax, status line, K8s shortcuts)
+├── zshrc                   # Zsh config (oh-my-zsh, 60+ aliases, functions)
+├── motd.sh                 # Dynamic MOTD (ASCII art, node info, guide)
+└── completions/            # Zsh completions for ndiag-* scripts
+
+scripts/                    # Diagnostic scripts (in PATH via symlinks)
+├── _kdiag-lib.sh           # Shared K8s API helpers, colors, formatting
+├── ndiag-cpu               # CPU: top, freq, load, throttle
+├── ndiag-mem               # Memory: usage, top, dimms, swap, oom
+├── ndiag-net               # Network: ifaces, conns, listen, dns, reach, capture
+├── ndiag-disk              # Disk: health, io, usage, bench
+├── ndiag-part              # Partition: mounts, lvm, fs, table
+├── kdiag-node              # K8s node: status, resources, taints, pressure, kubelet
+├── kdiag-pods              # Pods: list, sick, resources, images, logs
+├── kdiag-etcd              # etcd: health, members, size, alarms, perf, keys (CP)
+├── kdiag-certs             # Certs: k8s, etcd, SA token, TLS endpoints
+├── kdiag-services          # Services: list, dns, endpoints, connectivity
+└── kdiag-events            # Events: node, warnings, all, ns, watch
+
+docs/
+├── ssh.md                  # Full SSH shell documentation
+└── screenshots/            # Dashboard screenshots
 ```
 
 ## License

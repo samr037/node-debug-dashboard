@@ -1,0 +1,208 @@
+#!/bin/bash
+# kdiag-events — Smart Kubernetes event viewer
+# Usage: kdiag-events [subcommand]
+# Subcommands: node, warnings, all, ns <namespace>, watch
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${SCRIPT_DIR}/_kdiag-lib.sh"
+
+cmd_node() {
+    header "Events for Node ${NODE_NAME}"
+
+    local events
+    events=$(k8s_api "/api/v1/events?fieldSelector=involvedObject.name=${NODE_NAME}")
+
+    local count
+    count=$(echo "$events" | jq '.items | length' 2>/dev/null)
+
+    if [ "$count" = "0" ] || [ -z "$count" ]; then
+        dim "No events found for this node"
+        return
+    fi
+
+    echo -e "  ${C_DIM}TIME                 TYPE     REASON              MESSAGE${C_RESET}"
+    echo "$events" | jq -r '.items | sort_by(.lastTimestamp // .eventTime) | reverse | .[:30] | .[] |
+        "\(.lastTimestamp // .eventTime // "?")\t\(.type // "Normal")\t\(.reason // "?")\t\(.message // "")"
+    ' 2>/dev/null | \
+    while IFS=$'\t' read -r time type reason msg; do
+        local color="$C_RESET"
+        [ "$type" = "Warning" ] && color="$C_YELLOW"
+        [ "$type" = "Error" ] 2>/dev/null && color="$C_RED"
+        local short_time="${time:0:19}"
+        printf "  ${color}%-20s %-8s %-19s %s${C_RESET}\n" "$short_time" "$type" "$reason" "${msg:0:70}"
+    done
+
+    echo ""
+    dim "Showing latest 30 of ${count} events"
+}
+
+cmd_warnings() {
+    header "Cluster-Wide Warnings"
+
+    local events
+    events=$(k8s_api "/api/v1/events?fieldSelector=type=Warning")
+
+    local count
+    count=$(echo "$events" | jq '.items | length' 2>/dev/null)
+
+    if [ "$count" = "0" ] || [ -z "$count" ]; then
+        ok "No warning events in the cluster"
+        return
+    fi
+
+    # Group by reason
+    echo -e "  ${C_BOLD}By Reason:${C_RESET}"
+    echo "$events" | jq -r '[.items[] | .reason // "Unknown"] | group_by(.) | map({reason: .[0], count: length}) | sort_by(-.count) | .[:15] | .[] | "\(.reason)\t\(.count)"' 2>/dev/null | \
+    while IFS=$'\t' read -r reason cnt; do
+        local color="$C_YELLOW"
+        [ "$cnt" -gt 10 ] 2>/dev/null && color="$C_RED"
+        printf "    ${color}%4s${C_RESET}  %s\n" "$cnt" "$reason"
+    done
+
+    # Group by involved object kind
+    echo ""
+    echo -e "  ${C_BOLD}By Object Kind:${C_RESET}"
+    echo "$events" | jq -r '[.items[] | .involvedObject.kind // "Unknown"] | group_by(.) | map({kind: .[0], count: length}) | sort_by(-.count) | .[] | "\(.kind)\t\(.count)"' 2>/dev/null | \
+    while IFS=$'\t' read -r kind cnt; do
+        printf "    %4s  %s\n" "$cnt" "$kind"
+    done
+
+    # Most recent warnings
+    echo ""
+    header "Latest Warnings (last 20)"
+    echo -e "  ${C_DIM}TIME                 NAMESPACE            OBJECT                     REASON              MESSAGE${C_RESET}"
+    echo "$events" | jq -r '.items | sort_by(.lastTimestamp // .eventTime) | reverse | .[:20] | .[] |
+        "\(.lastTimestamp // .eventTime // "?")\t\(.involvedObject.namespace // "-")\t\(.involvedObject.kind // "")/\(.involvedObject.name // "")\t\(.reason // "?")\t\(.message // "")"
+    ' 2>/dev/null | \
+    while IFS=$'\t' read -r time ns obj reason msg; do
+        printf "  ${C_YELLOW}%-20s${C_RESET} %-20s %-26s %-19s %s\n" "${time:0:19}" "$ns" "${obj:0:26}" "$reason" "${msg:0:50}"
+    done
+
+    echo ""
+    dim "Total: ${count} warning events"
+}
+
+cmd_all_events() {
+    header "All Recent Events (cluster-wide)"
+
+    local events
+    events=$(k8s_api "/api/v1/events")
+
+    echo -e "  ${C_DIM}TIME                 TYPE     NS                   OBJECT                     REASON${C_RESET}"
+    echo "$events" | jq -r '.items | sort_by(.lastTimestamp // .eventTime) | reverse | .[:50] | .[] |
+        "\(.lastTimestamp // .eventTime // "?")\t\(.type // "Normal")\t\(.involvedObject.namespace // "-")\t\(.involvedObject.kind // "")/\(.involvedObject.name // "")\t\(.reason // "?")"
+    ' 2>/dev/null | \
+    while IFS=$'\t' read -r time type ns obj reason; do
+        local color="$C_RESET"
+        [ "$type" = "Warning" ] && color="$C_YELLOW"
+        printf "  ${color}%-20s %-8s %-20s %-26s %s${C_RESET}\n" "${time:0:19}" "$type" "$ns" "${obj:0:26}" "$reason"
+    done
+
+    local total
+    total=$(echo "$events" | jq '.items | length' 2>/dev/null)
+    echo ""
+    dim "Showing latest 50 of ${total} events"
+}
+
+cmd_ns() {
+    local namespace="${1:-default}"
+    header "Events in Namespace: ${namespace}"
+
+    local events
+    events=$(k8s_api "/api/v1/namespaces/${namespace}/events")
+
+    local count
+    count=$(echo "$events" | jq '.items | length' 2>/dev/null)
+
+    if [ "$count" = "0" ] || [ -z "$count" ]; then
+        dim "No events in namespace ${namespace}"
+        return
+    fi
+
+    echo -e "  ${C_DIM}TIME                 TYPE     OBJECT                     REASON              MESSAGE${C_RESET}"
+    echo "$events" | jq -r '.items | sort_by(.lastTimestamp // .eventTime) | reverse | .[:30] | .[] |
+        "\(.lastTimestamp // .eventTime // "?")\t\(.type // "Normal")\t\(.involvedObject.kind // "")/\(.involvedObject.name // "")\t\(.reason // "?")\t\(.message // "")"
+    ' 2>/dev/null | \
+    while IFS=$'\t' read -r time type obj reason msg; do
+        local color="$C_RESET"
+        [ "$type" = "Warning" ] && color="$C_YELLOW"
+        printf "  ${color}%-20s %-8s %-26s %-19s %s${C_RESET}\n" "${time:0:19}" "$type" "${obj:0:26}" "$reason" "${msg:0:50}"
+    done
+
+    echo ""
+    dim "Showing latest 30 of ${count} events"
+}
+
+cmd_watch() {
+    header "Watching Events (live)"
+    dim "Press Ctrl+C to stop"
+    echo ""
+
+    # Use resourceVersion to only get new events
+    local rv
+    rv=$(k8s_api "/api/v1/events?limit=1" | jq -r '.metadata.resourceVersion // ""' 2>/dev/null)
+
+    local token
+    token=$(cat "$K8S_TOKEN_FILE" 2>/dev/null)
+
+    curl -sk --no-buffer \
+        --cacert "$K8S_CA" \
+        -H "Authorization: Bearer ${token}" \
+        "${K8S_API}/api/v1/events?watch=true&resourceVersion=${rv}" 2>/dev/null | \
+    while read -r line; do
+        local etype obj_kind obj_name ns reason msg event_type
+        etype=$(echo "$line" | jq -r '.type // "?"' 2>/dev/null)
+        event_type=$(echo "$line" | jq -r '.object.type // "Normal"' 2>/dev/null)
+        ns=$(echo "$line" | jq -r '.object.involvedObject.namespace // "-"' 2>/dev/null)
+        obj_kind=$(echo "$line" | jq -r '.object.involvedObject.kind // ""' 2>/dev/null)
+        obj_name=$(echo "$line" | jq -r '.object.involvedObject.name // ""' 2>/dev/null)
+        reason=$(echo "$line" | jq -r '.object.reason // "?"' 2>/dev/null)
+        msg=$(echo "$line" | jq -r '.object.message // ""' 2>/dev/null)
+
+        local now
+        now=$(date '+%H:%M:%S')
+        local color="$C_RESET"
+        [ "$event_type" = "Warning" ] && color="$C_YELLOW"
+
+        printf "  ${color}${now}  %-8s %-15s %s/%-20s %-15s %s${C_RESET}\n" "$event_type" "$ns" "$obj_kind" "${obj_name:0:20}" "$reason" "${msg:0:50}"
+    done
+}
+
+show_help() {
+    cat << 'EOF'
+kdiag-events — Smart Kubernetes event viewer
+
+USAGE
+    kdiag-events <subcommand> [args]
+
+SUBCOMMANDS
+    node        Events related to this node (last 30)
+    warnings    Cluster-wide warnings grouped by reason and kind
+    all         All recent events cluster-wide (last 50)
+    ns <name>   Events in a specific namespace (default: "default")
+    watch       Live event stream (Ctrl+C to stop)
+
+EXAMPLES
+    kdiag-events node            # What happened to this node?
+    kdiag-events warnings        # Any cluster warnings?
+    kdiag-events ns kube-system  # kube-system events
+    kdiag-events watch           # Live tail of all events
+    kdiag-events all | less      # Browse recent events
+
+NOTES
+    - "warnings" groups by reason to spot patterns (e.g., 50x FailedScheduling)
+    - "watch" uses the K8s watch API for real-time streaming
+    - Events are ephemeral — K8s default TTL is 1 hour
+    - For historical events, check logging/monitoring systems
+EOF
+}
+
+case "${1:-node}" in
+    node)     cmd_node ;;
+    warnings) cmd_warnings ;;
+    all)      cmd_all_events ;;
+    ns)       cmd_ns "${2:-default}" ;;
+    watch)    cmd_watch ;;
+    -h|--help|help) show_help ;;
+    *) echo "Unknown: $1 — run 'kdiag-events --help'"; exit 1 ;;
+esac

@@ -1,0 +1,240 @@
+#!/bin/bash
+# kdiag-pods — Pod diagnostics for this Kubernetes node
+# Usage: kdiag-pods [subcommand]
+# Subcommands: list, sick, resources, images, logs, all
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${SCRIPT_DIR}/_kdiag-lib.sh"
+
+_get_pods() {
+    k8s_api "/api/v1/pods?fieldSelector=spec.nodeName=${NODE_NAME}"
+}
+
+cmd_list() {
+    header "Pods on ${NODE_NAME}"
+    local pods_json
+    pods_json=$(_get_pods)
+
+    echo -e "  ${C_DIM}NAMESPACE            NAME                                      STATUS       RESTARTS  AGE${C_RESET}"
+    echo "$pods_json" | jq -r '.items[] |
+        .metadata.namespace as $ns |
+        .metadata.name as $name |
+        .status.phase as $phase |
+        (.status.startTime // "?") as $start |
+        ([.status.containerStatuses[]?.restartCount // 0] | add // 0) as $restarts |
+        "\($ns)\t\($name)\t\($phase)\t\($restarts)\t\($start)"
+    ' 2>/dev/null | sort | \
+    while IFS=$'\t' read -r ns name phase restarts start; do
+        local color="$C_GREEN"
+        case "$phase" in
+            Running) color="$C_GREEN" ;;
+            Succeeded) color="$C_DIM" ;;
+            Pending) color="$C_YELLOW" ;;
+            Failed|Unknown) color="$C_RED" ;;
+        esac
+        [ "$restarts" -gt 5 ] 2>/dev/null && color="$C_YELLOW"
+        [ "$restarts" -gt 20 ] 2>/dev/null && color="$C_RED"
+        printf "  ${color}%-20s %-42s %-12s %4s      %s${C_RESET}\n" "$ns" "${name:0:42}" "$phase" "$restarts" "${start:0:10}"
+    done
+
+    local total
+    total=$(echo "$pods_json" | jq '.items | length' 2>/dev/null)
+    echo ""
+    dim "Total: ${total} pods"
+}
+
+cmd_sick() {
+    header "Unhealthy Pods on ${NODE_NAME}"
+    local pods_json
+    pods_json=$(_get_pods)
+    local found=0
+
+    # CrashLoopBackOff
+    local crashes
+    crashes=$(echo "$pods_json" | jq -r '.items[] |
+        .metadata.namespace as $ns | .metadata.name as $name |
+        .status.containerStatuses[]? |
+        select(.state.waiting.reason == "CrashLoopBackOff") |
+        "\($ns)\t\($name)\t\(.name)\t\(.restartCount)"
+    ' 2>/dev/null)
+    if [ -n "$crashes" ]; then
+        echo -e "  ${C_RED}${C_BOLD}CrashLoopBackOff:${C_RESET}"
+        echo "$crashes" | while IFS=$'\t' read -r ns pod ctr restarts; do
+            fail "${ns}/${pod} → ${ctr} (${restarts} restarts)"
+        done
+        echo ""
+        found=1
+    fi
+
+    # OOMKilled
+    local ooms
+    ooms=$(echo "$pods_json" | jq -r '.items[] |
+        .metadata.namespace as $ns | .metadata.name as $name |
+        .status.containerStatuses[]? |
+        select(.lastState.terminated.reason == "OOMKilled") |
+        "\($ns)\t\($name)\t\(.name)\t\(.lastState.terminated.finishedAt // "?")"
+    ' 2>/dev/null)
+    if [ -n "$ooms" ]; then
+        echo -e "  ${C_RED}${C_BOLD}OOMKilled (last termination):${C_RESET}"
+        echo "$ooms" | while IFS=$'\t' read -r ns pod ctr when; do
+            fail "${ns}/${pod} → ${ctr} (killed: ${when})"
+        done
+        echo ""
+        found=1
+    fi
+
+    # Pending pods
+    local pending
+    pending=$(echo "$pods_json" | jq -r '.items[] | select(.status.phase == "Pending") |
+        .metadata.namespace as $ns |
+        "\($ns)\t\(.metadata.name)\t\(.status.conditions[]? | select(.type=="PodScheduled") | .message // "unknown")"
+    ' 2>/dev/null)
+    if [ -n "$pending" ]; then
+        echo -e "  ${C_YELLOW}${C_BOLD}Pending:${C_RESET}"
+        echo "$pending" | while IFS=$'\t' read -r ns pod reason; do
+            warn "${ns}/${pod} — ${reason:0:70}"
+        done
+        echo ""
+        found=1
+    fi
+
+    # High restart pods (>10)
+    local restarters
+    restarters=$(echo "$pods_json" | jq -r '.items[] |
+        .metadata.namespace as $ns | .metadata.name as $name |
+        ([.status.containerStatuses[]?.restartCount // 0] | add // 0) as $r |
+        select($r > 10) |
+        "\($ns)\t\($name)\t\($r)"
+    ' 2>/dev/null)
+    if [ -n "$restarters" ]; then
+        echo -e "  ${C_YELLOW}${C_BOLD}High Restarts (>10):${C_RESET}"
+        echo "$restarters" | sort -t$'\t' -k3 -rn | while IFS=$'\t' read -r ns pod restarts; do
+            warn "${ns}/${pod} — ${restarts} restarts"
+        done
+        echo ""
+        found=1
+    fi
+
+    # Init containers stuck
+    local init_stuck
+    init_stuck=$(echo "$pods_json" | jq -r '.items[] |
+        .metadata.namespace as $ns | .metadata.name as $name |
+        .status.initContainerStatuses[]? |
+        select(.state.waiting != null) |
+        "\($ns)\t\($name)\t\(.name)\t\(.state.waiting.reason // "waiting")"
+    ' 2>/dev/null)
+    if [ -n "$init_stuck" ]; then
+        echo -e "  ${C_YELLOW}${C_BOLD}Stuck Init Containers:${C_RESET}"
+        echo "$init_stuck" | while IFS=$'\t' read -r ns pod ctr reason; do
+            warn "${ns}/${pod} → init:${ctr} (${reason})"
+        done
+        echo ""
+        found=1
+    fi
+
+    [ "$found" = "0" ] && ok "All pods healthy!"
+}
+
+cmd_resources() {
+    header "Pod Resource Usage — ${NODE_NAME}"
+    local pods_json
+    pods_json=$(_get_pods)
+
+    echo -e "  ${C_DIM}NAMESPACE            POD                                  CPU REQ    MEM REQ      GPU${C_RESET}"
+    echo "$pods_json" | jq -r '.items[] | select(.status.phase == "Running") |
+        .metadata.namespace as $ns |
+        .metadata.name as $name |
+        ([.spec.containers[].resources.requests.cpu // "0" | if endswith("m") then .[:-1] else (tonumber * 1000 | tostring) end | tonumber] | add) as $cpu |
+        ([.spec.containers[].resources.requests.memory // "0" | if endswith("Mi") then (.[:-2] | tonumber) elif endswith("Gi") then (.[:-2] | tonumber * 1024) elif endswith("Ki") then (.[:-2] | tonumber / 1024 | floor) else 0 end] | add) as $mem |
+        ([.spec.containers[].resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add) as $gpu |
+        "\($ns)\t\($name)\t\($cpu)\t\($mem)\t\($gpu)"
+    ' 2>/dev/null | sort -t$'\t' -k4 -rn | \
+    while IFS=$'\t' read -r ns name cpu mem gpu; do
+        local gpu_str=""
+        [ "$gpu" -gt 0 ] 2>/dev/null && gpu_str="${C_MAGENTA}${gpu}${C_RESET}"
+        printf "  %-20s %-36s %6sm    %6s Mi   %s\n" "$ns" "${name:0:36}" "$cpu" "$mem" "$gpu_str"
+    done
+
+    # Totals
+    echo ""
+    local total_cpu total_mem total_gpu
+    total_cpu=$(echo "$pods_json" | jq '[.items[]? | select(.status.phase == "Running") | .spec.containers[]?.resources.requests.cpu // "0" | if endswith("m") then (.[:-1] | tonumber) else (tonumber * 1000) end] | add // 0' 2>/dev/null)
+    total_mem=$(echo "$pods_json" | jq '[.items[]? | select(.status.phase == "Running") | .spec.containers[]?.resources.requests.memory // "0" | if endswith("Mi") then (.[:-2] | tonumber) elif endswith("Gi") then (.[:-2] | tonumber * 1024) else 0 end] | add // 0' 2>/dev/null)
+    total_gpu=$(echo "$pods_json" | jq '[.items[]? | select(.status.phase == "Running") | .spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add // 0' 2>/dev/null)
+    echo -e "  ${C_BOLD}Totals: ${total_cpu}m CPU, ${total_mem} Mi memory, ${total_gpu} GPU${C_RESET}"
+}
+
+cmd_images() {
+    header "Container Images on ${NODE_NAME}"
+    local pods_json
+    pods_json=$(_get_pods)
+
+    echo -e "  ${C_DIM}IMAGE                                                              COUNT${C_RESET}"
+    echo "$pods_json" | jq -r '[.items[].spec.containers[].image] | group_by(.) | map({image: .[0], count: length}) | sort_by(-.count) | .[] | "\(.image)\t\(.count)"' 2>/dev/null | \
+    while IFS=$'\t' read -r image count; do
+        printf "  %-65s %3s\n" "${image:0:65}" "$count"
+    done
+
+    echo ""
+    local unique total
+    unique=$(echo "$pods_json" | jq '[.items[].spec.containers[].image] | unique | length' 2>/dev/null)
+    total=$(echo "$pods_json" | jq '[.items[].spec.containers[].image] | length' 2>/dev/null)
+    dim "${unique} unique images, ${total} total containers"
+}
+
+cmd_logs() {
+    header "Recent Pod Log Directories"
+    echo -e "${C_DIM}  Sorted by most recent activity${C_RESET}"
+    echo ""
+    ls -lt /host/var/log/pods/ 2>/dev/null | tail -n +2 | head -20 | \
+        awk '{printf "  %-12s %s\n", $6" "$7" "$8, $9}'
+    echo ""
+    dim "Use 'podlog <name>' to tail a pod's logs"
+    dim "Use 'clogf <container-id>' for live container logs"
+}
+
+cmd_all() {
+    cmd_list
+    cmd_sick
+    cmd_resources
+    cmd_images
+}
+
+show_help() {
+    cat << 'EOF'
+kdiag-pods — Pod diagnostics for this Kubernetes node
+
+USAGE
+    kdiag-pods <subcommand>
+
+SUBCOMMANDS
+    list        All pods on this node with status, restarts, age
+    sick        Unhealthy pods: CrashLoop, OOMKilled, Pending, high restarts
+    resources   Per-pod resource requests (CPU, memory, GPU)
+    images      Container image inventory with counts
+    logs        Recent pod log directories
+    all         Run list + sick + resources + images
+
+EXAMPLES
+    kdiag-pods sick          # Quick health check
+    kdiag-pods resources     # Who's eating my resources?
+    kdiag-pods images        # What's running?
+    kdiag-pods all | less    # Full pod diagnostic
+
+NOTES
+    - Queries pods via fieldSelector for this node only
+    - "sick" detects: CrashLoopBackOff, OOMKilled, Pending, high restarts, stuck init
+    - Resource display shows requests, not limits or actual usage
+EOF
+}
+
+case "${1:-all}" in
+    list)      cmd_list ;;
+    sick)      cmd_sick ;;
+    resources) cmd_resources ;;
+    images)    cmd_images ;;
+    logs)      cmd_logs ;;
+    all)       cmd_all ;;
+    -h|--help|help) show_help ;;
+    *) echo "Unknown: $1 — run 'kdiag-pods --help'"; exit 1 ;;
+esac

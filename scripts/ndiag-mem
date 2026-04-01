@@ -1,0 +1,203 @@
+#!/bin/bash
+# ndiag-mem — Memory diagnostics for Node Debug Dashboard
+# Usage: ndiag-mem [subcommand]
+# Subcommands: usage, top, dimms, swap, oom, all
+
+set -euo pipefail
+
+C_RESET="\033[0m"
+C_BOLD="\033[1m"
+C_CYAN="\033[36m"
+C_GREEN="\033[32m"
+C_YELLOW="\033[33m"
+C_RED="\033[31m"
+C_DIM="\033[2m"
+HOST_PROC="${HOST_PROC:-/host-proc}"
+
+header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
+
+cmd_usage() {
+    header "Memory Usage Summary"
+    awk '
+    /^MemTotal:/     {total=$2}
+    /^MemFree:/      {free=$2}
+    /^MemAvailable:/ {avail=$2}
+    /^Buffers:/      {buf=$2}
+    /^Cached:/       {cached=$2}
+    /^SwapTotal:/    {swtotal=$2}
+    /^SwapFree:/     {swfree=$2}
+    /^Shmem:/        {shmem=$2}
+    /^SReclaimable:/ {sreclaimable=$2}
+    /^Dirty:/        {dirty=$2}
+    /^Hugepagesize:/ {hpsize=$2}
+    /^HugePages_Total:/ {hptotal=$2}
+    /^HugePages_Free:/  {hpfree=$2}
+    END {
+        used = total - avail
+        pct = (used/total)*100
+
+        printf "  Total:       %8.1f GB\n", total/1048576
+        printf "  Used:        %8.1f GB  (%.1f%%)\n", used/1048576, pct
+        printf "  Available:   %8.1f GB\n", avail/1048576
+        printf "  Free:        %8.1f GB\n", free/1048576
+        printf "  Buffers:     %8.1f MB\n", buf/1024
+        printf "  Cached:      %8.1f GB\n", cached/1048576
+        printf "  Shared:      %8.1f MB\n", shmem/1024
+        printf "  Reclaimable: %8.1f MB\n", sreclaimable/1024
+        printf "  Dirty:       %8.1f MB\n", dirty/1024
+        printf "\n"
+        if (swtotal > 0) {
+            printf "  Swap Total:  %8.1f GB\n", swtotal/1048576
+            printf "  Swap Used:   %8.1f GB  (%.1f%%)\n", (swtotal-swfree)/1048576, ((swtotal-swfree)/swtotal)*100
+        } else {
+            printf "  Swap:        disabled\n"
+        }
+        if (hptotal > 0) {
+            printf "\n  HugePages:   %d total, %d free (%d KB each)\n", hptotal, hpfree, hpsize
+        }
+    }
+    ' "${HOST_PROC}/meminfo" 2>/dev/null
+
+    # Memory pressure gauge
+    local pct=$(awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{printf "%.0f", ((t-a)/t)*100}' "${HOST_PROC}/meminfo" 2>/dev/null)
+    local color="$C_GREEN"
+    [ "$pct" -gt 70 ] 2>/dev/null && color="$C_YELLOW"
+    [ "$pct" -gt 90 ] 2>/dev/null && color="$C_RED"
+    local filled=$((pct / 5))
+    local empty=$((20 - filled))
+    echo ""
+    printf "  [${color}"
+    printf '█%.0s' $(seq 1 $filled 2>/dev/null || echo "")
+    printf "${C_DIM}"
+    printf '░%.0s' $(seq 1 $empty 2>/dev/null || echo "")
+    echo -e "${C_RESET}] ${color}${pct}%%${C_RESET}"
+}
+
+cmd_top() {
+    header "Top Memory Consumers"
+    echo -e "${C_DIM}  PID     USER        RSS      %MEM  COMMAND${C_RESET}"
+    ps -eo pid,user,rss,%mem,comm --sort=-rss 2>/dev/null | head -16 | tail -15 | \
+        awk '{printf "  %-7s %-10s %6.0f MB  %5s  %s\n", $1, $2, $3/1024, $4, $5}'
+}
+
+cmd_dimms() {
+    header "DIMM Inventory"
+    local output=$(dmidecode -t memory 2>/dev/null)
+    if [ -z "$output" ]; then
+        echo -e "  ${C_DIM}dmidecode not available or no permission${C_RESET}"
+        return
+    fi
+
+    echo "$output" | awk '
+    /^Memory Device$/ {count++; size=""; type=""; speed=""; loc=""; mfr=""}
+    /^\tSize:/ {size=$2" "$3}
+    /^\tType:/ {type=$2}
+    /^\tConfigured Memory Speed:/ {speed=$4" "$5}
+    /^\tLocator:/ {loc=$2}
+    /^\tManufacturer:/ {mfr=$2}
+    /^\tPart Number:/ {
+        part=$2
+        if (size != "" && size != "No") {
+            printf "  %-12s %-8s %-6s %-12s %-10s %s\n", loc, size, type, speed, mfr, part
+        }
+    }
+    '
+
+    # ECC check
+    echo ""
+    local ecc=$(echo "$output" | grep -c "Error Correction Type.*ECC" 2>/dev/null || echo "0")
+    if [ "$ecc" -gt 0 ]; then
+        echo -e "  ECC: ${C_GREEN}Enabled${C_RESET}"
+        local errors=$(echo "$output" | grep -c "Error Information Handle.*Not" 2>/dev/null || echo "?")
+        echo -e "  Errors: ${errors}"
+    else
+        echo -e "  ECC: ${C_DIM}Not available${C_RESET}"
+    fi
+}
+
+cmd_swap() {
+    header "Swap Details"
+    local swap_total=$(awk '/^SwapTotal:/{print $2}' "${HOST_PROC}/meminfo" 2>/dev/null || echo "0")
+
+    if [ "$swap_total" = "0" ]; then
+        echo -e "  ${C_DIM}Swap is disabled${C_RESET}"
+    else
+        cat "${HOST_PROC}/swaps" 2>/dev/null | column -t | sed 's/^/  /'
+        echo ""
+        echo -e "${C_DIM}  Top swap consumers:${C_RESET}"
+        for pid in $(ls "${HOST_PROC}" 2>/dev/null | grep -E '^[0-9]+$' | head -100); do
+            local swap=$(awk '/^VmSwap:/{print $2}' "${HOST_PROC}/${pid}/status" 2>/dev/null || echo "0")
+            local name=$(awk '/^Name:/{print $2}' "${HOST_PROC}/${pid}/status" 2>/dev/null || echo "?")
+            [ "$swap" -gt 0 ] 2>/dev/null && echo "$swap $pid $name"
+        done | sort -rn | head -10 | awk '{printf "  PID %-7s %6.0f MB  %s\n", $2, $1/1024, $3}'
+    fi
+}
+
+cmd_oom() {
+    header "Recent OOM Kills"
+    local oom_count=$(dmesg 2>/dev/null | grep -c "Out of memory" || echo "0")
+    if [ "$oom_count" -gt 0 ]; then
+        echo -e "  ${C_RED}Found ${oom_count} OOM events${C_RESET}"
+        echo ""
+        dmesg 2>/dev/null | grep -A2 "Out of memory" | tail -15 | sed 's/^/  /'
+    else
+        echo -e "  ${C_GREEN}No OOM kills detected in kernel ring buffer${C_RESET}"
+    fi
+
+    echo ""
+    header "Memory Pressure"
+    if [ -f "/host/sys/fs/cgroup/memory.pressure" ]; then
+        cat /host/sys/fs/cgroup/memory.pressure 2>/dev/null | sed 's/^/  /'
+    elif [ -f "/host/proc/pressure/memory" ]; then
+        cat /host/proc/pressure/memory 2>/dev/null | sed 's/^/  /'
+    else
+        cat "${HOST_PROC}/pressure/memory" 2>/dev/null | sed 's/^/  /' || echo -e "  ${C_DIM}PSI not available${C_RESET}"
+    fi
+}
+
+cmd_all() {
+    cmd_usage
+    cmd_top
+    cmd_dimms
+    cmd_swap
+    cmd_oom
+}
+
+show_help() {
+    cat << 'EOF'
+ndiag-mem — Memory diagnostics for Kubernetes nodes
+
+USAGE
+    ndiag-mem <subcommand>
+
+SUBCOMMANDS
+    usage      Memory usage summary with gauge (total, used, cached, swap)
+    top        Top 15 memory-consuming processes (RSS)
+    dimms      DIMM inventory (size, type, speed, manufacturer, ECC)
+    swap       Swap details and top swap consumers
+    oom        Recent OOM kills and memory pressure (PSI)
+    all        Run all of the above
+
+EXAMPLES
+    ndiag-mem usage      # Quick memory check
+    ndiag-mem oom        # Check for OOM kills
+    ndiag-mem dimms      # Physical RAM layout
+    ndiag-mem all | less # Full report, paginated
+
+NOTES
+    - Reads from /host-proc/meminfo for host-level data
+    - DIMM info requires dmidecode (needs privileged container)
+    - OOM detection uses the kernel ring buffer (dmesg)
+EOF
+}
+
+case "${1:-all}" in
+    usage)   cmd_usage ;;
+    top)     cmd_top ;;
+    dimms)   cmd_dimms ;;
+    swap)    cmd_swap ;;
+    oom)     cmd_oom ;;
+    all)     cmd_all ;;
+    -h|--help|help) show_help ;;
+    *) echo "Unknown subcommand: $1"; echo "Run 'ndiag-mem --help' for usage"; exit 1 ;;
+esac

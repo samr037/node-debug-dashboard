@@ -1,0 +1,14 @@
+#compdef kdiag-events
+_kdiag_events() {
+    local -a subcommands
+    subcommands=(
+        'node:Events for this node'
+        'warnings:Cluster-wide warnings (grouped)'
+        'all:All recent events cluster-wide'
+        'ns:Events in a namespace (usage: ns <name>)'
+        'watch:Live event stream'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+_kdiag_events "$@"

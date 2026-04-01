@@ -1,0 +1,14 @@
+#compdef kdiag-services
+_kdiag_services() {
+    local -a subcommands
+    subcommands=(
+        'list:All cluster services'
+        'dns:CoreDNS health + resolution tests'
+        'endpoints:Endpoint readiness per service'
+        'connectivity:Connectivity matrix (apiserver, DNS, etcd, kubelet)'
+        'all:Full service diagnostic report'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+_kdiag_services "$@"

@@ -1,0 +1,313 @@
+# Node Debug Dashboard — Zsh Configuration
+# Loaded for both root and debug users
+
+# === Oh-My-Zsh ===
+export ZSH="/opt/oh-my-zsh"
+ZSH_THEME="agnoster"
+DISABLE_AUTO_UPDATE="true"
+DISABLE_UPDATE_PROMPT="true"
+plugins=(git docker kubectl colored-man-pages command-not-found zsh-autosuggestions zsh-syntax-highlighting)
+source "$ZSH/oh-my-zsh.sh"
+
+# === Prompt context — show user@node ===
+prompt_context() {
+    local node="${KUBERNETES_NODE_NAME:-$(hostname)}"
+    prompt_segment black default "%(!.%{%F{yellow}%}.)%n@${node}"
+}
+
+# === Environment ===
+export EDITOR=vim
+export VISUAL=vim
+export PAGER="less -R"
+export LESS="-R -F -X"
+export HOST_ROOT="${HOST_ROOT:-/host}"
+export HOST_PROC="${HOST_PROC:-/host-proc}"
+export CRICTL_RUNTIME_ENDPOINT="unix:///host/run/containerd/containerd.sock"
+export PATH="/opt/node-dashboard/scripts:$PATH:/host/usr/local/bin:/host/usr/bin"
+
+# === History ===
+HISTSIZE=10000
+SAVEHIST=10000
+HISTFILE=~/.zsh_history
+setopt HIST_IGNORE_DUPS
+setopt HIST_IGNORE_SPACE
+setopt SHARE_HISTORY
+setopt APPEND_HISTORY
+setopt INC_APPEND_HISTORY
+
+# === Navigation ===
+setopt AUTO_CD
+setopt AUTO_PUSHD
+setopt PUSHD_IGNORE_DUPS
+setopt PUSHD_SILENT
+
+# === Completion ===
+autoload -Uz compinit && compinit
+zstyle ':completion:*' menu select
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
+zstyle ':completion:*:descriptions' format '%B%F{cyan}── %d ──%f%b'
+zstyle ':completion:*:warnings' format '%F{red}No matches%f'
+
+# Load ndiag completions
+[[ -d /opt/node-dashboard/ssh/completions ]] && fpath=(/opt/node-dashboard/ssh/completions $fpath) && compinit
+
+# ─── Host Namespace ───
+alias hostns='nsenter --target 1 --mount --uts --ipc --net --pid -- /bin/bash'
+alias hostsh='nsenter --target 1 --mount --uts --ipc --net --pid -- /bin/sh'
+alias hostcmd='nsenter --target 1 --mount --uts --ipc --net --pid --'
+
+# ─── Filesystem Navigation ───
+alias hroot='cd /host'
+alias hlog='cd /host/var/log'
+alias hpods='cd /host/var/log/pods'
+alias hetc='cd /host/etc'
+alias hproc='cd /host-proc'
+alias hkube='cd /host/etc/kubernetes'
+
+# ─── Container Runtime ───
+alias cps='crictl ps'
+alias cpsa='crictl ps -a'
+alias cpods='crictl pods'
+alias cimg='crictl images'
+alias clog='crictl logs'
+alias clogf='crictl logs -f'
+alias cinsp='crictl inspect'
+alias cstats='crictl stats'
+alias cexec='crictl exec -it'
+
+# ─── Kubernetes (via curl + SA token) ───
+_k8s_curl() {
+    local path="$1"; shift
+    curl -sk \
+        --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+        -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null)" \
+        "https://kubernetes.default.svc${path}" "$@"
+}
+alias kn='_k8s_curl /api/v1/nodes 2>/dev/null | jq -r ".items[] | \"\(.metadata.name)\t\(.status.conditions[-1].type)=\(.status.conditions[-1].status)\""'
+alias kp='_k8s_curl /api/v1/pods 2>/dev/null | jq -r ".items[] | \"\(.metadata.namespace)\t\(.metadata.name)\t\(.status.phase)\""'
+alias kpn='_k8s_curl "/api/v1/pods?fieldSelector=spec.nodeName=${KUBERNETES_NODE_NAME}" 2>/dev/null | jq -r ".items[] | \"\(.metadata.namespace)\t\(.metadata.name)\t\(.status.phase)\""'
+alias kevents='_k8s_curl /api/v1/events 2>/dev/null | jq -r ".items | sort_by(.lastTimestamp) | .[-20:] | .[] | \"\(.lastTimestamp)\t\(.involvedObject.kind)/\(.involvedObject.name)\t\(.reason)\t\(.message[0:80])\""'
+
+# ─── Networking ───
+alias ports='ss -tlnp'
+alias portsu='ss -ulnp'
+alias conns='ss -tnp'
+alias ifaces='ip -c -br addr'
+alias routes='ip -c route'
+alias listen='ss -tlnp | grep LISTEN'
+alias pubip='curl -s ifconfig.me'
+alias dnscheck='dig +short google.com @8.8.8.8'
+alias pingg='ping -c3 8.8.8.8'
+alias pingdns='ping -c3 google.com'
+alias tcpd='tcpdump -i any -nn'
+alias sniff='tcpdump -i any -nn -c 100'
+
+# ─── Process & System ───
+alias psmem='ps aux --sort=-%mem | head -20'
+alias pscpu='ps aux --sort=-%cpu | head -20'
+alias topmem='ps -eo pid,ppid,user,%mem,%cpu,rss,comm --sort=-%mem | head -20'
+alias topcpu='ps -eo pid,ppid,user,%mem,%cpu,rss,comm --sort=-%cpu | head -20'
+alias loadavg='cat /host-proc/loadavg'
+alias memfree='free -h'
+alias vmstats='vmstat 1 5'
+alias iostats='iostat -x 1 5'
+
+# ─── Disk & Storage ───
+alias dfu='df -h | grep -v tmpfs | grep -v overlay'
+alias dfi='df -ih | grep -v tmpfs | grep -v overlay'
+alias lsblk='lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL'
+alias smart='smartctl -a'
+alias smartall='for d in $(lsblk -dno NAME | grep -E "^sd|^nvme"); do echo "=== $d ==="; smartctl -H /host/dev/$d 2>/dev/null; done'
+
+# ─── Logs ===
+alias dmesg='dmesg -T --color=always'
+alias journalh='cat /host/var/log/journal/*/*.journal 2>/dev/null || echo "No journal files found"'
+alias podlogs='ls /host/var/log/pods/'
+podlog() {
+    local pod_dir=$(ls -d /host/var/log/pods/*"$1"* 2>/dev/null | head -1)
+    if [ -n "$pod_dir" ]; then
+        local log=$(find "$pod_dir" -name "*.log" | sort | tail -1)
+        [ -n "$log" ] && tail -f "$log" || echo "No log files found"
+    else
+        echo "No pod matching '$1' found in /host/var/log/pods/"
+    fi
+}
+
+# ─── Hardware ───
+alias cpuinfo='lscpu'
+alias meminfo='dmidecode -t memory 2>/dev/null | grep -E "Size|Type|Speed|Locator" | head -30'
+alias pcidev='lspci -v'
+alias usbdev='lsusb -v 2>/dev/null | grep -E "^Bus|idVendor|idProduct|iProduct"'
+alias sensors='cat /host/sys/class/thermal/thermal_zone*/temp 2>/dev/null | while read t; do echo "$((t/1000))°C"; done'
+alias gpuinfo='nsenter --target 1 --mount --uts --ipc --net --pid -- nvidia-smi 2>/dev/null || echo "No NVIDIA GPU or driver"'
+alias gputop='nsenter --target 1 --mount --uts --ipc --net --pid -- nvidia-smi dmon -s u -d 1 -c 5 2>/dev/null || echo "No NVIDIA GPU"'
+
+# ─── Utility ───
+alias cls='clear'
+alias ll='ls -lAh --color=auto'
+alias la='ls -A --color=auto'
+alias lt='ls -lAht --color=auto'
+alias grep='grep --color=auto'
+alias diff='diff --color=auto'
+alias tree='tree -C'
+alias h='history | tail -30'
+alias path='echo $PATH | tr ":" "\n"'
+alias now='date +"%Y-%m-%d %H:%M:%S %Z"'
+alias epoch='date +%s'
+
+# ─── Meta ───
+aliases() {
+    echo -e "\033[1m\033[36m── Host Namespace ──\033[0m"
+    echo "  hostns        Enter full host namespace"
+    echo "  hostsh        Host shell (sh)"
+    echo "  hostcmd CMD   Run a single command in host ns"
+    echo ""
+    echo -e "\033[1m\033[36m── Filesystem ──\033[0m"
+    echo "  hroot         cd /host"
+    echo "  hlog          cd /host/var/log"
+    echo "  hpods         cd /host/var/log/pods"
+    echo "  hetc          cd /host/etc"
+    echo "  hkube         cd /host/etc/kubernetes"
+    echo ""
+    echo -e "\033[1m\033[36m── Containers ──\033[0m"
+    echo "  cps/cpsa      crictl ps / ps -a"
+    echo "  cpods         crictl pods"
+    echo "  clog/clogf    crictl logs / logs -f"
+    echo "  cinsp ID      crictl inspect"
+    echo "  cstats        crictl stats"
+    echo "  cexec ID      crictl exec -it"
+    echo ""
+    echo -e "\033[1m\033[36m── Kubernetes ──\033[0m"
+    echo "  kn            List nodes"
+    echo "  kp            List all pods"
+    echo "  kpn           List pods on this node"
+    echo "  kevents       Last 20 cluster events"
+    echo ""
+    echo -e "\033[1m\033[36m── Networking ──\033[0m"
+    echo "  ports/portsu  TCP/UDP listeners"
+    echo "  conns         Active TCP connections"
+    echo "  ifaces        Network interfaces"
+    echo "  routes        Routing table"
+    echo "  listen        LISTEN sockets only"
+    echo "  pubip         Public IP"
+    echo "  tcpd/sniff    tcpdump shortcuts"
+    echo ""
+    echo -e "\033[1m\033[36m── Processes ──\033[0m"
+    echo "  topmem/topcpu Top by mem/cpu"
+    echo "  psmem/pscpu   ps sorted by mem/cpu"
+    echo "  loadavg       Load average"
+    echo "  iostats       I/O statistics"
+    echo ""
+    echo -e "\033[1m\033[36m── Disk ──\033[0m"
+    echo "  dfu/dfi       Disk usage / inode usage"
+    echo "  lsblk         Block devices"
+    echo "  smart DEV     SMART data for device"
+    echo "  smartall      SMART health for all disks"
+    echo ""
+    echo -e "\033[1m\033[36m── Hardware Diagnostics ──\033[0m"
+    echo "  ndiag-cpu     CPU diagnostics"
+    echo "  ndiag-mem     Memory diagnostics"
+    echo "  ndiag-net     Network diagnostics"
+    echo "  ndiag-disk    Disk diagnostics"
+    echo "  ndiag-part    Partition diagnostics"
+    echo ""
+    echo -e "\033[1m\033[34m── Kubernetes Diagnostics ──\033[0m"
+    echo "  kdiag-node       Node health + resources"
+    echo "  kdiag-pods       Pod health + sick detection"
+    echo "  kdiag-etcd       etcd deep dive (CP only)"
+    echo "  kdiag-certs      Certificate audit + expiry"
+    echo "  kdiag-services   Service DNS + endpoints"
+    echo "  kdiag-events     Smart event viewer + watch"
+}
+
+help-ndiag() {
+    echo -e "\033[1m\033[36m── Hardware Diagnostic Scripts (ndiag-*) ──\033[0m"
+    echo ""
+    echo "Each script has subcommands. Run with --help for full docs."
+    echo ""
+    echo -e "\033[1mndiag-cpu\033[0m"
+    echo "  top        Top CPU consumers"
+    echo "  freq       CPU frequency per core"
+    echo "  load       Load average + breakdown"
+    echo "  throttle   Thermal throttling check"
+    echo "  all        Full CPU report"
+    echo ""
+    echo -e "\033[1mndiag-mem\033[0m"
+    echo "  usage      Memory usage summary"
+    echo "  top        Top memory consumers"
+    echo "  dimms      DIMM inventory"
+    echo "  swap       Swap usage details"
+    echo "  oom        Recent OOM kills"
+    echo "  all        Full memory report"
+    echo ""
+    echo -e "\033[1mndiag-net\033[0m"
+    echo "  ifaces     Interface stats + errors"
+    echo "  conns      Active connections"
+    echo "  listen     Listening ports"
+    echo "  dns        DNS resolution test"
+    echo "  reach      Connectivity checks"
+    echo "  capture    Quick packet capture"
+    echo "  all        Full network report"
+    echo ""
+    echo -e "\033[1mndiag-disk\033[0m"
+    echo "  health     SMART health for all disks"
+    echo "  io         I/O stats and latency"
+    echo "  usage      Disk space usage"
+    echo "  bench      Quick sequential R/W test"
+    echo "  all        Full disk report"
+    echo ""
+    echo -e "\033[1mndiag-part\033[0m"
+    echo "  mounts     Active mounts"
+    echo "  lvm        LVM layout"
+    echo "  fs         Filesystem details"
+    echo "  table      Partition tables"
+    echo "  all        Full partition report"
+    echo ""
+    echo -e "\033[1m\033[34m── Kubernetes Diagnostic Scripts (kdiag-*) ──\033[0m"
+    echo ""
+    echo -e "\033[1mkdiag-node\033[0m"
+    echo "  status     Node conditions, version, OS"
+    echo "  resources  Capacity vs allocatable vs pod requests"
+    echo "  taints     Taints, labels, annotations"
+    echo "  pressure   PSI + K8s pressure conditions"
+    echo "  kubelet    Component processes, static pods"
+    echo "  all        Full node diagnostic"
+    echo ""
+    echo -e "\033[1mkdiag-pods\033[0m"
+    echo "  list       All pods on this node"
+    echo "  sick       CrashLoop, OOM, Pending, high restarts"
+    echo "  resources  Per-pod CPU/memory/GPU requests"
+    echo "  images     Container image inventory"
+    echo "  logs       Pod log directories"
+    echo "  all        Full pod diagnostic"
+    echo ""
+    echo -e "\033[1mkdiag-etcd\033[0m  \033[2m(control plane only)\033[0m"
+    echo "  health     Health, version, process"
+    echo "  members    Cluster members + leader"
+    echo "  size       DB size, fragmentation, quota"
+    echo "  alarms     Active alarms"
+    echo "  perf       Write/read latency + WAL fsync"
+    echo "  keys       Key count by /registry/* prefix"
+    echo "  all        Full etcd diagnostic"
+    echo ""
+    echo -e "\033[1mkdiag-certs\033[0m"
+    echo "  k8s        Kubernetes PKI certs + expiry"
+    echo "  etcd       etcd certs"
+    echo "  sa         ServiceAccount token decode"
+    echo "  tls        Live TLS endpoint check"
+    echo "  all        Full certificate audit"
+    echo ""
+    echo -e "\033[1mkdiag-services\033[0m"
+    echo "  list       All cluster services"
+    echo "  dns        CoreDNS health + resolution"
+    echo "  endpoints  Endpoint readiness"
+    echo "  connectivity  Component connectivity matrix"
+    echo "  all        Full service diagnostic"
+    echo ""
+    echo -e "\033[1mkdiag-events\033[0m"
+    echo "  node       Events for this node"
+    echo "  warnings   Cluster-wide warnings (grouped)"
+    echo "  all        All recent events"
+    echo "  ns <name>  Events in a namespace"
+    echo "  watch      Live event stream (Ctrl+C)"
+}

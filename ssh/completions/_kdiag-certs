@@ -1,0 +1,14 @@
+#compdef kdiag-certs
+_kdiag_certs() {
+    local -a subcommands
+    subcommands=(
+        'k8s:Kubernetes PKI certificates'
+        'etcd:etcd certificates'
+        'sa:ServiceAccount token decode + test'
+        'tls:Live TLS endpoint cert check'
+        'all:Full certificate audit'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+_kdiag_certs "$@"
