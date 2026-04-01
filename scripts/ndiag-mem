@@ -127,20 +127,21 @@ cmd_dimms() {
                 ;;
         esac
         [ "$in_dev" = "0" ] && continue
-        # Extract fields — everything after ": "
-        case "$line" in
-            *"Size:"*)           size=$(echo "$line" | sed 's/.*Size: *//') ;;
-            *"Type:"*)           [[ "$line" != *"Type Detail:"* ]] && type=$(echo "$line" | sed 's/.*Type: *//') ;;
-            *"Configured Memory Speed:"*) speed=$(echo "$line" | sed 's/.*Configured Memory Speed: *//') ;;
-            *"Speed:"*)          [ -z "$speed" ] && speed=$(echo "$line" | sed 's/.*Speed: *//') ;;
-            *"Locator:"*)        [[ "$line" != *"Bank Locator:"* ]] && loc=$(echo "$line" | sed 's/.*Locator: *//') ;;
-            *"Manufacturer:"*)   mfr=$(echo "$line" | sed 's/.*Manufacturer: *//') ;;
-            *"Serial Number:"*)  serial=$(echo "$line" | sed 's/.*Serial Number: *//') ;;
-            *"Part Number:"*)    part=$(echo "$line" | sed 's/.*Part Number: *//' | xargs) ;;
-            *"Rank:"*)           rank=$(echo "$line" | sed 's/.*Rank: *//') ;;
-            *"Form Factor:"*)    form=$(echo "$line" | sed 's/.*Form Factor: *//') ;;
-            *"Configured Voltage:"*) voltage=$(echo "$line" | sed 's/.*Configured Voltage: *//') ;;
-            *"Data Width:"*)     width=$(echo "$line" | sed 's/.*Data Width: *//') ;;
+        # Extract fields — match tab-indented dmidecode fields precisely
+        local trimmed="${line#	}"  # strip leading tab
+        case "$trimmed" in
+            "Size: "*)                    size="${trimmed#Size: }" ;;
+            "Type: "*)                    type="${trimmed#Type: }" ;;
+            "Configured Memory Speed: "*) speed="${trimmed#Configured Memory Speed: }" ;;
+            "Speed: "*)                   [ -z "$speed" ] && speed="${trimmed#Speed: }" ;;
+            "Locator: "*)                 loc="${trimmed#Locator: }" ;;
+            "Manufacturer: "*)            mfr="${trimmed#Manufacturer: }" ;;
+            "Serial Number: "*)           serial="${trimmed#Serial Number: }" ;;
+            "Part Number: "*)             part=$(echo "${trimmed#Part Number: }" | xargs) ;;
+            "Rank: "*)                    rank="${trimmed#Rank: }" ;;
+            "Form Factor: "*)             form="${trimmed#Form Factor: }" ;;
+            "Configured Voltage: "*)      voltage="${trimmed#Configured Voltage: }" ;;
+            "Data Width: "*)              width="${trimmed#Data Width: }" ;;
         esac
     done <<< "$output"
 
@@ -163,7 +164,7 @@ cmd_dimms() {
     local num_slots
     num_slots=$(echo "$output" | grep "Number Of Devices:" | head -1 | sed 's/.*Number Of Devices: *//')
     local installed
-    installed=$(echo "$output" | grep -c "Size: [0-9]" 2>/dev/null) || installed=0
+    installed=$(echo "$output" | grep -cP "^\tSize: [0-9]" 2>/dev/null) || installed=0
     echo -e "  ${C_DIM}Slots: ${installed}/${num_slots} populated  |  Max capacity: ${max_cap}${C_RESET}"
 
     # ECC check
