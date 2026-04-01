@@ -11,6 +11,13 @@ cmd_list() {
     local svcs
     svcs=$(k8s_api "/api/v1/services")
 
+    local reason
+    reason=$(echo "$svcs" | jq -r '.reason // empty' 2>/dev/null)
+    if [ "$reason" = "Forbidden" ]; then
+        warn "No permission to list services (add services to RBAC ClusterRole)"
+        return
+    fi
+
     echo -e "  ${C_DIM}NAMESPACE            NAME                          TYPE          CLUSTER-IP       PORTS${C_RESET}"
     echo "$svcs" | jq -r '.items[] |
         .metadata.namespace as $ns |
@@ -109,8 +116,15 @@ cmd_endpoints() {
         local eps
         eps=$(k8s_api "/api/v1/namespaces/${ns}/endpoints")
         local svc_count
-        svc_count=$(echo "$eps" | jq '.items | length' 2>/dev/null)
-        [ "$svc_count" = "0" ] && continue
+        svc_count=$(echo "$eps" | jq '.items | length' 2>/dev/null) || svc_count=0
+        # Check for RBAC forbidden
+        local reason
+        reason=$(echo "$eps" | jq -r '.reason // empty' 2>/dev/null)
+        if [ "$reason" = "Forbidden" ]; then
+            warn "No permission to list endpoints (add endpoints to RBAC ClusterRole)"
+            return
+        fi
+        [ "${svc_count:-0}" = "0" ] && continue
 
         echo -e "  ${C_BOLD}${ns}:${C_RESET}"
         echo "$eps" | jq -r '.items[] |

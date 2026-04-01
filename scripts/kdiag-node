@@ -75,8 +75,13 @@ cmd_resources() {
     pod_cap=$(echo "$node_json" | jq -r '.status.allocatable.pods // "110"' 2>/dev/null)
     gpu_cap=$(echo "$node_json" | jq -r '.status.capacity["nvidia.com/gpu"] // "0"' 2>/dev/null)
 
-    local cpu_alloc_m=$((${cpu_alloc%m} * 1000))
-    [ "$cpu_alloc" = "${cpu_alloc%m}" ] && cpu_alloc_m=$((cpu_alloc * 1000))
+    # Convert allocatable CPU to millicores
+    local cpu_alloc_m
+    if [[ "$cpu_alloc" == *m ]]; then
+        cpu_alloc_m=${cpu_alloc%m}
+    else
+        cpu_alloc_m=$((cpu_alloc * 1000))
+    fi
 
     # CPU
     local cpu_pct=0

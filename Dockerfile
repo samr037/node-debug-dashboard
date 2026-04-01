@@ -36,7 +36,8 @@ ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 ARG CRICTL_VERSION=v1.32.0
 RUN curl -fsSL "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-amd64.tar.gz" \
     | tar -xz -C /usr/local/bin \
-    && chmod +x /usr/local/bin/crictl
+    && chmod +x /usr/local/bin/crictl \
+    && printf 'runtime-endpoint: unix:///host/run/containerd/containerd.sock\nimage-endpoint: unix:///host/run/containerd/containerd.sock\n' > /etc/crictl.yaml
 
 # Oh-My-Zsh — shared install for all users
 RUN git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git /opt/oh-my-zsh \

@@ -105,11 +105,13 @@ cmd_dimms() {
 
     # ECC check
     echo ""
-    local ecc=$(echo "$output" | grep -c "Error Correction Type.*ECC" 2>/dev/null || echo "0")
-    if [ "$ecc" -gt 0 ]; then
+    local ecc
+    ecc=$(echo "$output" | grep -c "Error Correction Type.*ECC" 2>/dev/null) || ecc=0
+    if [ "${ecc:-0}" -gt 0 ] 2>/dev/null; then
         echo -e "  ECC: ${C_GREEN}Enabled${C_RESET}"
-        local errors=$(echo "$output" | grep -c "Error Information Handle.*Not" 2>/dev/null || echo "?")
-        echo -e "  Errors: ${errors}"
+        local errors
+        errors=$(echo "$output" | grep -c "Error Information Handle.*Not" 2>/dev/null) || errors=0
+        echo -e "  Errors: ${errors:-0}"
     else
         echo -e "  ECC: ${C_DIM}Not available${C_RESET}"
     fi

@@ -85,7 +85,7 @@ alias cexec='crictl exec -it'
 # ─── Kubernetes (via curl + SA token) ───
 _k8s_curl() {
     local path="$1"; shift
-    curl -sk \
+    command curl -sk --max-time 10 \
         --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
         -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null)" \
         "https://kubernetes.default.svc${path}" "$@"
