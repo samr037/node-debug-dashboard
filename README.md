@@ -7,7 +7,7 @@
 ## Features
 
 - **Hardware** — CPU, RAM (DIMMs, ECC), PCI, USB, NICs, sensors (temps/fans/voltages), NVIDIA GPUs (via nsenter)
-- **Storage** — Disks, partitions, SMART health, disk usage with severity alerts
+- **Storage** — Disks, partitions, comprehensive SMART health (ATA + NVMe, wearout, temperatures, error counters, USB bridge support), disk usage with severity alerts
 - **System** — UEFI boot order and entries
 - **Network** — Interface stats, speed/duplex, error counters, DNS/internet/K8s API connectivity
 - **Kubernetes** — Node labels, conditions, capacity/allocatable resources, PKI certificates (obfuscated), component health probes, etcd deep metrics (DB size, leader, members, raft index)
@@ -17,7 +17,7 @@
 - **Processes** — Top 200 host processes by memory with PID/PPID/user/CPU%/MEM%
 - **Warnings** — Aggregated alerts from SMART, temperatures, memory errors, disk usage, certificate expiry, K8s node conditions
 - **Cluster Navigation** — Searchable dropdown listing all nodes with role/status, click to jump between dashboards
-- **SSH Debug Shell** — Zsh + oh-my-zsh (agnoster), vim with custom config, 11 diagnostic scripts (`ndiag-*` + `kdiag-*`), 60+ aliases, dynamic MOTD — [full SSH docs](docs/ssh.md)
+- **SSH Debug Shell** — Zsh + oh-my-zsh (agnoster), vim with custom config, 11 diagnostic scripts (`ndiag-*` + `kdiag-*`) with `--raw` mode, 60+ aliases, dynamic MOTD, `help` command — [full SSH docs](docs/ssh.md)
 - **Themes** — Dark, Light, and Auto (follows OS preference), persists across nodes via URL params
 - **Scalable** — Tiered caching (10s/60s/5min), section-based parallel fetching, dropdown cluster bar with search
 - **Auto-refresh** — 10-second polling with persistent UI state (open sections and scroll position preserved)
@@ -227,7 +227,7 @@ spec:
 
 Then access `http://<node-ip>/` for the dashboard, `http://<node-ip>/docs` for Swagger.
 
-> **Note:** Create a ServiceAccount with `get`/`list` permissions on `nodes` and `pods` for the Kubernetes and cluster navigation features.
+> **Note:** Create a ServiceAccount with `get`/`list` permissions on `nodes`, `pods`, `services`, `endpoints`, and `events` for the Kubernetes diagnostics and SSH `kdiag-*` scripts.
 
 ### Docker (standalone)
 

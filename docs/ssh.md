@@ -117,6 +117,14 @@ Type `aliases` for the full list, or `help-ndiag` for diagnostic script docs.
 
 Five hardware diagnostic scripts are included, each with subcommands and built-in help. Tab completion works for all subcommands.
 
+All scripts support `--raw` / `-r` to output the raw underlying commands (no formatting or color). Useful for scripting or piping into other tools:
+
+```bash
+ndiag-disk --raw health    # Full smartctl -a output for each disk
+kdiag-node -r status       # Raw K8s Node JSON
+ndiag-mem --raw dimms      # Raw dmidecode -t memory output
+```
+
 ![ndiag-cpu + ndiag-mem](screenshots/ssh-ndiag-hw.png)
 
 ### ndiag-cpu
@@ -140,7 +148,7 @@ Memory diagnostics — usage, DIMM inventory, swap, OOM detection.
 ndiag-mem              # Full report
 ndiag-mem usage        # Memory gauge + breakdown
 ndiag-mem top          # Top 15 RSS consumers
-ndiag-mem dimms        # Physical DIMM layout + ECC status
+ndiag-mem dimms        # Full DIMM detail (size, speed, manufacturer, part number, serial, rank, voltage)
 ndiag-mem swap         # Swap usage + top swap consumers
 ndiag-mem oom          # OOM kills + memory pressure (PSI)
 ndiag-mem --help       # Full documentation
@@ -163,11 +171,11 @@ ndiag-net --help       # Full documentation
 
 ### ndiag-disk
 
-Disk diagnostics — SMART health, I/O stats, usage, benchmarks.
+Disk diagnostics — comprehensive SMART health (ATA + NVMe), I/O stats, usage, benchmarks. Supports USB-SATA bridges, detects HDD/SSD/NVMe, color-coded warnings for wearout, reallocated sectors, and temperature.
 
 ```bash
 ndiag-disk             # Full report (health + usage + io)
-ndiag-disk health      # SMART health + key attributes
+ndiag-disk health      # SMART health with full attributes per disk
 ndiag-disk io          # Live I/O stats (1s sample)
 ndiag-disk usage       # Disk space + inode usage
 ndiag-disk bench       # Quick 256MB sequential R/W test
@@ -189,7 +197,9 @@ ndiag-part --help      # Full documentation
 
 ## Kubernetes Diagnostic Scripts
 
-Six `kdiag-*` scripts provide deep K8s visibility from inside the node. All use the pod's ServiceAccount token and (on control plane nodes) direct etcd client certs.
+Six `kdiag-*` scripts provide deep K8s visibility from inside the node. All use the pod's ServiceAccount token and (on control plane nodes) direct etcd client certs. All support `--raw`/`-r` to dump raw JSON.
+
+> **RBAC requirement:** The ServiceAccount needs `get`/`list` on `nodes`, `pods`, `services`, `endpoints`, and `events`.
 
 | kdiag-node | kdiag-etcd (CP) |
 |---|---|
