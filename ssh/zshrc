@@ -1,6 +1,11 @@
 # Node Debug Dashboard — Zsh Configuration
 # Loaded for both root and debug users
 
+# === MOTD — show on interactive login shells only ===
+if [[ -o login && -o interactive && -f /etc/profile.d/motd.sh ]]; then
+    source /etc/profile.d/motd.sh
+fi
+
 # === Oh-My-Zsh ===
 export ZSH="/opt/oh-my-zsh"
 ZSH_THEME="agnoster"
