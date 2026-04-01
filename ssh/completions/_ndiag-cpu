@@ -1,0 +1,17 @@
+#compdef ndiag-cpu
+# Zsh completion for ndiag-cpu
+
+_ndiag_cpu() {
+    local -a subcommands
+    subcommands=(
+        'top:Top 15 CPU-consuming processes'
+        'freq:Per-core frequency and governor'
+        'load:Load average and CPU time breakdown'
+        'throttle:Thermal throttling check'
+        'all:Full CPU diagnostic report'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+
+_ndiag_cpu "$@"

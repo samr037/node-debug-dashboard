@@ -1,0 +1,15 @@
+#compdef kdiag-pods
+_kdiag_pods() {
+    local -a subcommands
+    subcommands=(
+        'list:All pods on this node with status'
+        'sick:Unhealthy pods (CrashLoop, OOM, Pending)'
+        'resources:Per-pod resource requests'
+        'images:Container image inventory'
+        'logs:Recent pod log directories'
+        'all:Full pod diagnostic report'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+_kdiag_pods "$@"

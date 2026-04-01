@@ -1,0 +1,252 @@
+#!/bin/bash
+# kdiag-services — Kubernetes service & DNS debugging
+# Usage: kdiag-services [subcommand]
+# Subcommands: list, dns, endpoints, connectivity, all
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${SCRIPT_DIR}/_kdiag-lib.sh"
+
+cmd_list() {
+    header "Cluster Services"
+    local svcs
+    svcs=$(k8s_api "/api/v1/services")
+
+    echo -e "  ${C_DIM}NAMESPACE            NAME                          TYPE          CLUSTER-IP       PORTS${C_RESET}"
+    echo "$svcs" | jq -r '.items[] |
+        .metadata.namespace as $ns |
+        .metadata.name as $name |
+        .spec.type as $type |
+        (.spec.clusterIP // "None") as $ip |
+        ([.spec.ports[]? | "\(.port)/\(.protocol // "TCP")"] | join(",")) as $ports |
+        "\($ns)\t\($name)\t\($type)\t\($ip)\t\($ports)"
+    ' 2>/dev/null | sort | \
+    while IFS=$'\t' read -r ns name type ip ports; do
+        local color="$C_RESET"
+        [ "$type" = "LoadBalancer" ] && color="$C_CYAN"
+        [ "$type" = "NodePort" ] && color="$C_YELLOW"
+        [ "$ip" = "None" ] && color="$C_DIM"
+        printf "  ${color}%-20s %-30s %-13s %-16s %s${C_RESET}\n" "$ns" "${name:0:30}" "$type" "$ip" "$ports"
+    done
+
+    local total
+    total=$(echo "$svcs" | jq '.items | length' 2>/dev/null)
+    echo ""
+    dim "Total: ${total} services"
+}
+
+cmd_dns() {
+    header "Kubernetes DNS Resolution"
+
+    # CoreDNS pod check
+    local coredns
+    coredns=$(k8s_api "/api/v1/namespaces/kube-system/pods?labelSelector=k8s-app=kube-dns")
+    local dns_pods
+    dns_pods=$(echo "$coredns" | jq -r '.items[]? | "\(.metadata.name)\t\(.status.phase)\t\(.status.podIP // "?")"' 2>/dev/null)
+
+    if [ -n "$dns_pods" ]; then
+        echo -e "  ${C_BOLD}CoreDNS Pods:${C_RESET}"
+        echo "$dns_pods" | while IFS=$'\t' read -r name phase ip; do
+            if [ "$phase" = "Running" ]; then
+                ok "${name} (${ip})"
+            else
+                fail "${name} — ${phase}"
+            fi
+        done
+    else
+        warn "No CoreDNS pods found"
+    fi
+
+    # DNS resolution tests
+    echo ""
+    echo -e "  ${C_BOLD}Resolution Tests:${C_RESET}"
+
+    local tests=(
+        "kubernetes.default.svc.cluster.local"
+        "kube-dns.kube-system.svc.cluster.local"
+        "google.com"
+    )
+
+    # Find the cluster DNS IP
+    local dns_ip
+    dns_ip=$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf 2>/dev/null)
+
+    for target in "${tests[@]}"; do
+        local start end result ms
+        start=$(date +%s%N)
+        result=$(dig +short "$target" @"${dns_ip:-10.96.0.10}" +time=3 2>/dev/null | head -1)
+        end=$(date +%s%N)
+        ms=$(( (end - start) / 1000000 ))
+
+        if [ -n "$result" ]; then
+            ok "${target} → ${result} ${C_DIM}(${ms}ms)${C_RESET}"
+        else
+            fail "${target} ${C_DIM}(${ms}ms, timeout or NXDOMAIN)${C_RESET}"
+        fi
+    done
+
+    # Search domains
+    echo ""
+    echo -e "  ${C_BOLD}DNS Config:${C_RESET}"
+    grep -E 'nameserver|search|ndots' /etc/resolv.conf 2>/dev/null | sed 's/^/    /'
+}
+
+cmd_endpoints() {
+    header "Service Endpoints Health"
+
+    # Get services with their endpoints for key namespaces
+    local namespaces=("kube-system" "default")
+
+    # Also check the node's running pods' namespaces
+    local extra_ns
+    extra_ns=$(k8s_api "/api/v1/pods?fieldSelector=spec.nodeName=${NODE_NAME}" | \
+        jq -r '[.items[].metadata.namespace] | unique | .[]' 2>/dev/null | \
+        grep -vE 'kube-system|default' | head -5)
+    for ns in $extra_ns; do
+        namespaces+=("$ns")
+    done
+
+    for ns in "${namespaces[@]}"; do
+        local eps
+        eps=$(k8s_api "/api/v1/namespaces/${ns}/endpoints")
+        local svc_count
+        svc_count=$(echo "$eps" | jq '.items | length' 2>/dev/null)
+        [ "$svc_count" = "0" ] && continue
+
+        echo -e "  ${C_BOLD}${ns}:${C_RESET}"
+        echo "$eps" | jq -r '.items[] |
+            .metadata.name as $name |
+            ([.subsets[]?.addresses // [] | length] | add // 0) as $ready |
+            ([.subsets[]?.notReadyAddresses // [] | length] | add // 0) as $notready |
+            ([.subsets[]?.ports[]?.port // empty] | map(tostring) | join(",")) as $ports |
+            "\($name)\t\($ready)\t\($notready)\t\($ports)"
+        ' 2>/dev/null | \
+        while IFS=$'\t' read -r name ready notready ports; do
+            local color="$C_GREEN"
+            local icon="✓"
+            if [ "$ready" = "0" ] && [ "$notready" -gt 0 ] 2>/dev/null; then
+                color="$C_RED"; icon="✗"
+            elif [ "$notready" -gt 0 ] 2>/dev/null; then
+                color="$C_YELLOW"; icon="⚠"
+            elif [ "$ready" = "0" ] && [ "$notready" = "0" ]; then
+                color="$C_DIM"; icon="○"
+            fi
+            printf "    ${color}${icon}${C_RESET} %-28s ${color}%s ready${C_RESET}" "$name" "$ready"
+            [ "$notready" -gt 0 ] 2>/dev/null && printf ", ${C_RED}%s not ready${C_RESET}" "$notready"
+            [ -n "$ports" ] && printf "  ${C_DIM}[%s]${C_RESET}" "$ports"
+            echo ""
+        done
+        echo ""
+    done
+}
+
+cmd_connectivity() {
+    header "Service Connectivity Tests"
+    dim "Testing key cluster services..."
+    echo ""
+
+    # kube-apiserver
+    local start end ms
+    start=$(date +%s%N)
+    if curl -sk --max-time 5 -o /dev/null \
+        --cacert "$K8S_CA" \
+        -H "Authorization: Bearer $(cat $K8S_TOKEN_FILE 2>/dev/null)" \
+        "${K8S_API}/api/v1" 2>/dev/null; then
+        ms=$(( ($(date +%s%N) - start) / 1000000 ))
+        ok "kube-apiserver          ${C_DIM}${ms}ms${C_RESET}"
+    else
+        fail "kube-apiserver"
+    fi
+
+    # CoreDNS
+    start=$(date +%s%N)
+    if dig +short kubernetes.default.svc.cluster.local +time=3 &>/dev/null; then
+        ms=$(( ($(date +%s%N) - start) / 1000000 ))
+        ok "CoreDNS                 ${C_DIM}${ms}ms${C_RESET}"
+    else
+        fail "CoreDNS"
+    fi
+
+    # etcd (CP only)
+    if is_control_plane; then
+        start=$(date +%s%N)
+        if etcd_api "/health" | jq -e '.health == "true"' &>/dev/null; then
+            ms=$(( ($(date +%s%N) - start) / 1000000 ))
+            ok "etcd                    ${C_DIM}${ms}ms${C_RESET}"
+        else
+            fail "etcd"
+        fi
+    fi
+
+    # Kubelet
+    start=$(date +%s%N)
+    if curl -sk --max-time 5 -o /dev/null https://127.0.0.1:10250/healthz 2>/dev/null; then
+        ms=$(( ($(date +%s%N) - start) / 1000000 ))
+        ok "kubelet                 ${C_DIM}${ms}ms${C_RESET}"
+    else
+        fail "kubelet"
+    fi
+
+    # Metrics server (optional)
+    start=$(date +%s%N)
+    local metrics_test
+    metrics_test=$(k8s_api "/apis/metrics.k8s.io/v1beta1/nodes/${NODE_NAME}" 2>/dev/null)
+    if echo "$metrics_test" | jq -e '.metadata.name' &>/dev/null; then
+        ms=$(( ($(date +%s%N) - start) / 1000000 ))
+        ok "metrics-server          ${C_DIM}${ms}ms${C_RESET}"
+    else
+        dim "metrics-server          (not available)"
+    fi
+
+    # External
+    start=$(date +%s%N)
+    if curl -sf --max-time 5 -o /dev/null https://1.1.1.1 2>/dev/null; then
+        ms=$(( ($(date +%s%N) - start) / 1000000 ))
+        ok "internet (HTTPS)        ${C_DIM}${ms}ms${C_RESET}"
+    else
+        fail "internet (HTTPS)"
+    fi
+}
+
+cmd_all() {
+    cmd_dns
+    cmd_endpoints
+    cmd_connectivity
+}
+
+show_help() {
+    cat << 'EOF'
+kdiag-services — Kubernetes service & DNS debugging
+
+USAGE
+    kdiag-services <subcommand>
+
+SUBCOMMANDS
+    list           All cluster services with type, IP, ports
+    dns            CoreDNS health, resolution tests, config
+    endpoints      Endpoint readiness for services in active namespaces
+    connectivity   Connectivity test: apiserver, CoreDNS, etcd, kubelet, internet
+    all            Run dns + endpoints + connectivity
+
+EXAMPLES
+    kdiag-services dns          # DNS broken?
+    kdiag-services endpoints    # Which services have no backends?
+    kdiag-services connectivity # Full connectivity matrix
+    kdiag-services list         # What services exist?
+
+NOTES
+    - dns tests use the cluster DNS IP from /etc/resolv.conf
+    - endpoints checks namespaces from kube-system, default, and pods on this node
+    - connectivity tests latency to each component
+    - For deeper DNS debugging: dig +trace <domain>
+EOF
+}
+
+case "${1:-all}" in
+    list)         cmd_list ;;
+    dns)          cmd_dns ;;
+    endpoints)    cmd_endpoints ;;
+    connectivity) cmd_connectivity ;;
+    all)          cmd_all ;;
+    -h|--help|help) show_help ;;
+    *) echo "Unknown: $1 — run 'kdiag-services --help'"; exit 1 ;;
+esac

@@ -1,0 +1,19 @@
+#compdef ndiag-net
+# Zsh completion for ndiag-net
+
+_ndiag_net() {
+    local -a subcommands
+    subcommands=(
+        'ifaces:Interface list with errors and speed'
+        'conns:Active TCP connections'
+        'listen:Listening TCP/UDP ports'
+        'dns:DNS resolution tests'
+        'reach:Connectivity checks'
+        'capture:Quick 50-packet tcpdump'
+        'all:Full network diagnostic report'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+
+_ndiag_net "$@"

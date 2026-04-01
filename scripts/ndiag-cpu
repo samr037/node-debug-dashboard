@@ -1,0 +1,173 @@
+#!/bin/bash
+# ndiag-cpu — CPU diagnostics for Node Debug Dashboard
+# Usage: ndiag-cpu [subcommand]
+# Subcommands: top, freq, load, throttle, all
+
+set -euo pipefail
+
+C_RESET="\033[0m"
+C_BOLD="\033[1m"
+C_CYAN="\033[36m"
+C_GREEN="\033[32m"
+C_YELLOW="\033[33m"
+C_RED="\033[31m"
+C_DIM="\033[2m"
+HOST_PROC="${HOST_PROC:-/host-proc}"
+
+header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
+
+cmd_top() {
+    header "Top CPU Consumers"
+    echo -e "${C_DIM}  PID     USER      %CPU  %MEM  COMMAND${C_RESET}"
+    ps -eo pid,user,%cpu,%mem,comm --sort=-%cpu 2>/dev/null | head -16 | tail -15 | \
+        awk '{printf "  %-7s %-9s %5s %5s  %s\n", $1, $2, $3, $4, $5}'
+    echo ""
+    echo -e "${C_DIM}  CPU count: $(grep -c ^processor ${HOST_PROC}/cpuinfo 2>/dev/null || echo '?')${C_RESET}"
+}
+
+cmd_freq() {
+    header "CPU Frequency"
+    local cpu_dir="${HOST_PROC}/../host/sys/devices/system/cpu"
+    if [ -d "/host/sys/devices/system/cpu" ]; then
+        cpu_dir="/host/sys/devices/system/cpu"
+    fi
+
+    # Try cpufreq first
+    local found=0
+    for cpudir in "${cpu_dir}"/cpu[0-9]*; do
+        local freq_file="${cpudir}/cpufreq/scaling_cur_freq"
+        local max_file="${cpudir}/cpufreq/scaling_max_freq"
+        local gov_file="${cpudir}/cpufreq/scaling_governor"
+        if [ -f "$freq_file" ]; then
+            local cpu=$(basename "$cpudir")
+            local cur=$(awk '{printf "%.0f", $1/1000}' "$freq_file" 2>/dev/null)
+            local max=$(awk '{printf "%.0f", $1/1000}' "$max_file" 2>/dev/null || echo "?")
+            local gov=$(cat "$gov_file" 2>/dev/null || echo "?")
+            local pct=0
+            [ "$max" != "?" ] && [ "$max" -gt 0 ] 2>/dev/null && pct=$((cur * 100 / max))
+            local color="$C_GREEN"
+            [ "$pct" -gt 80 ] 2>/dev/null && color="$C_YELLOW"
+            [ "$pct" -gt 95 ] 2>/dev/null && color="$C_RED"
+            printf "  %-6s  ${color}%4d MHz${C_RESET} / %d MHz  %-12s %3d%%\n" "$cpu" "$cur" "$max" "[$gov]" "$pct"
+            found=1
+        fi
+    done
+
+    if [ "$found" = "0" ]; then
+        # Fallback to /proc/cpuinfo
+        echo -e "${C_DIM}  (cpufreq not available, reading from /proc/cpuinfo)${C_RESET}"
+        grep -E "^processor|^cpu MHz" "${HOST_PROC}/cpuinfo" 2>/dev/null | paste - - | \
+            awk -F'[:\t]+' '{printf "  cpu%-3s  %.0f MHz\n", $2, $4}'
+    fi
+}
+
+cmd_load() {
+    header "Load Average"
+    local loadavg=$(cat "${HOST_PROC}/loadavg" 2>/dev/null)
+    local ncpu=$(grep -c ^processor "${HOST_PROC}/cpuinfo" 2>/dev/null || echo 1)
+    local load1=$(echo "$loadavg" | awk '{print $1}')
+    local load5=$(echo "$loadavg" | awk '{print $2}')
+    local load15=$(echo "$loadavg" | awk '{print $3}')
+    local procs=$(echo "$loadavg" | awk '{print $4}')
+
+    echo -e "  1 min:   ${C_BOLD}${load1}${C_RESET}"
+    echo -e "  5 min:   ${C_BOLD}${load5}${C_RESET}"
+    echo -e "  15 min:  ${C_BOLD}${load15}${C_RESET}"
+    echo -e "  Procs:   ${procs}"
+    echo -e "  CPUs:    ${ncpu}"
+    echo ""
+
+    local ratio=$(echo "$load1 $ncpu" | awk '{printf "%.1f", ($1/$2)*100}')
+    local pct=${ratio%.*}
+    local color="$C_GREEN"
+    [ "$pct" -gt 70 ] 2>/dev/null && color="$C_YELLOW"
+    [ "$pct" -gt 100 ] 2>/dev/null && color="$C_RED"
+    echo -e "  Load/CPU ratio: ${color}${ratio}%${C_RESET}"
+
+    header "CPU Time Breakdown"
+    awk '/^cpu / {
+        total=$2+$3+$4+$5+$6+$7+$8+$9+$10+$11
+        printf "  user:    %6.1f%%\n", ($2/total)*100
+        printf "  nice:    %6.1f%%\n", ($3/total)*100
+        printf "  system:  %6.1f%%\n", ($4/total)*100
+        printf "  idle:    %6.1f%%\n", ($5/total)*100
+        printf "  iowait:  %6.1f%%\n", ($6/total)*100
+        printf "  irq:     %6.1f%%\n", ($7/total)*100
+        printf "  softirq: %6.1f%%\n", ($8/total)*100
+        printf "  steal:   %6.1f%%\n", ($9/total)*100
+    }' "${HOST_PROC}/stat" 2>/dev/null
+}
+
+cmd_throttle() {
+    header "Thermal Throttling Check"
+
+    # Check thermal zones
+    local found=0
+    for tz in /host/sys/class/thermal/thermal_zone*; do
+        [ -d "$tz" ] || continue
+        local type=$(cat "$tz/type" 2>/dev/null || echo "unknown")
+        local temp=$(cat "$tz/temp" 2>/dev/null || echo 0)
+        local trip=""
+        for tf in "$tz"/trip_point_*_temp; do
+            [ -f "$tf" ] && trip=$(cat "$tf" 2>/dev/null) && break
+        done
+        local temp_c=$((temp / 1000))
+        local color="$C_GREEN"
+        [ "$temp_c" -gt 70 ] 2>/dev/null && color="$C_YELLOW"
+        [ "$temp_c" -gt 85 ] 2>/dev/null && color="$C_RED"
+        printf "  %-20s ${color}%3d°C${C_RESET}" "$type" "$temp_c"
+        [ -n "$trip" ] && printf "  (trip: %d°C)" "$((trip / 1000))"
+        echo ""
+        found=1
+    done
+    [ "$found" = "0" ] && echo -e "  ${C_DIM}No thermal zones found${C_RESET}"
+
+    # Check for throttle messages in dmesg
+    echo ""
+    header "Recent Throttle Events (dmesg)"
+    dmesg 2>/dev/null | grep -iE 'throttl|thermal|overheat' | tail -5 || echo -e "  ${C_GREEN}None found${C_RESET}"
+}
+
+cmd_all() {
+    cmd_load
+    cmd_freq
+    cmd_top
+    cmd_throttle
+}
+
+show_help() {
+    cat << 'EOF'
+ndiag-cpu — CPU diagnostics for Kubernetes nodes
+
+USAGE
+    ndiag-cpu <subcommand>
+
+SUBCOMMANDS
+    top        Top 15 CPU-consuming processes
+    freq       Per-core frequency, governor, and utilization %
+    load       Load average, per-CPU ratio, and time breakdown
+    throttle   Thermal zones, trip points, and dmesg throttle events
+    all        Run all of the above
+
+EXAMPLES
+    ndiag-cpu load       # Quick load check
+    ndiag-cpu freq       # See if CPU is scaling down
+    ndiag-cpu all        # Full CPU diagnostic report
+    ndiag-cpu all | less # Paginated output
+
+NOTES
+    - Reads from /host-proc and /host/sys for host-level data
+    - Frequency data requires cpufreq or falls back to /proc/cpuinfo
+    - Run inside the Node Debug Dashboard pod (privileged + hostPID)
+EOF
+}
+
+case "${1:-all}" in
+    top)      cmd_top ;;
+    freq)     cmd_freq ;;
+    load)     cmd_load ;;
+    throttle) cmd_throttle ;;
+    all)      cmd_all ;;
+    -h|--help|help) show_help ;;
+    *) echo "Unknown subcommand: $1"; echo "Run 'ndiag-cpu --help' for usage"; exit 1 ;;
+esac

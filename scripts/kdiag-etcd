@@ -1,0 +1,276 @@
+#!/bin/bash
+# kdiag-etcd — etcd diagnostics (control plane nodes only)
+# Usage: kdiag-etcd [subcommand]
+# Subcommands: health, members, size, alarms, perf, keys, all
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${SCRIPT_DIR}/_kdiag-lib.sh"
+
+_check_cp() {
+    if ! is_control_plane; then
+        fail "This node is not a control plane — etcd certs not found"
+        dim "Run this on a node with etcd (control plane)"
+        exit 0
+    fi
+}
+
+cmd_health() {
+    _check_cp
+    header "etcd Health"
+
+    local health
+    health=$(etcd_api "/health")
+    local is_healthy
+    is_healthy=$(echo "$health" | jq -r '.health // "false"' 2>/dev/null)
+
+    if [ "$is_healthy" = "true" ]; then
+        ok "etcd is healthy"
+    else
+        fail "etcd is unhealthy!"
+        echo "$health" | jq . 2>/dev/null | sed 's/^/    /'
+    fi
+
+    # etcd version
+    local version
+    version=$(etcd_api "/version")
+    local etcd_ver cluster_ver
+    etcd_ver=$(echo "$version" | jq -r '.etcdserver // "?"' 2>/dev/null)
+    cluster_ver=$(echo "$version" | jq -r '.etcdcluster // "?"' 2>/dev/null)
+    echo -e "  Version:    ${etcd_ver} (cluster: ${cluster_ver})"
+
+    # etcd process
+    local etcd_pid
+    etcd_pid=$(pgrep -f "etcd " 2>/dev/null | head -1)
+    if [ -n "$etcd_pid" ]; then
+        local etcd_mem
+        etcd_mem=$(ps -p "$etcd_pid" -o rss= 2>/dev/null | awk '{printf "%.0f", $1/1024}')
+        local etcd_uptime
+        etcd_uptime=$(ps -p "$etcd_pid" -o etimes= 2>/dev/null | xargs)
+        echo -e "  Process:    PID ${etcd_pid}, ${etcd_mem} MB, up $(human_duration ${etcd_uptime:-0})"
+    fi
+}
+
+cmd_members() {
+    _check_cp
+    header "etcd Members"
+
+    local members
+    members=$(etcd_api "/v3/cluster/member/list" -X POST -d '{}')
+
+    echo -e "  ${C_DIM}ID                   NAME                    PEER URL                          CLIENT URL${C_RESET}"
+    echo "$members" | jq -r '.members[]? | "\(.ID // .id)\t\(.name)\t\(.peerURLs[0] // "?")\t\(.clientURLs[0] // "?")"' 2>/dev/null | \
+    while IFS=$'\t' read -r id name peer client; do
+        printf "  %-20s %-23s %-33s %s\n" "$id" "$name" "$peer" "$client"
+    done
+
+    # Leader
+    local status
+    status=$(etcd_api "/v3/maintenance/status" -X POST -d '{}')
+    local leader_id
+    leader_id=$(echo "$status" | jq -r '.leader // "?"' 2>/dev/null)
+    local member_id
+    member_id=$(echo "$status" | jq -r '.header.member_id // .header.memberId // "?"' 2>/dev/null)
+
+    echo ""
+    if [ "$leader_id" = "$member_id" ]; then
+        echo -e "  Leader: ${C_GREEN}${C_BOLD}THIS NODE${C_RESET} (${leader_id})"
+    else
+        echo -e "  Leader: ${leader_id} ${C_DIM}(this node: ${member_id})${C_RESET}"
+    fi
+}
+
+cmd_size() {
+    _check_cp
+    header "etcd Database Size"
+
+    local status
+    status=$(etcd_api "/v3/maintenance/status" -X POST -d '{}')
+
+    local db_size db_size_in_use raft_index raft_term
+    db_size=$(echo "$status" | jq -r '.dbSize // .dbSizeInBytes // 0' 2>/dev/null)
+    db_size_in_use=$(echo "$status" | jq -r '.dbSizeInUse // 0' 2>/dev/null)
+    raft_index=$(echo "$status" | jq -r '.raftIndex // .header.raft_term // "?"' 2>/dev/null)
+    raft_term=$(echo "$status" | jq -r '.raftTerm // "?"' 2>/dev/null)
+
+    echo -e "  DB size:       ${C_BOLD}$(human_bytes $db_size)${C_RESET}"
+    echo -e "  In use:        $(human_bytes $db_size_in_use)"
+    if [ "$db_size" -gt 0 ] 2>/dev/null && [ "$db_size_in_use" -gt 0 ] 2>/dev/null; then
+        local frag_pct=$((100 - (db_size_in_use * 100 / db_size)))
+        echo -e "  Fragmentation: $(color_pct $frag_pct)"
+    fi
+    echo -e "  Raft index:    ${raft_index}"
+    echo -e "  Raft term:     ${raft_term}"
+
+    # Warn if large
+    if [ "$db_size" -gt 4294967296 ] 2>/dev/null; then
+        echo ""
+        fail "DB size > 4GB! Consider compaction + defrag"
+    elif [ "$db_size" -gt 2147483648 ] 2>/dev/null; then
+        echo ""
+        warn "DB size > 2GB — monitor growth"
+    fi
+
+    # Size gauge (max 8GB = etcd default limit)
+    local max_bytes=8589934592
+    local pct=$((db_size * 100 / max_bytes))
+    echo ""
+    printf "  Quota usage: "
+    pct_bar "$pct" 25
+    echo -e " ${C_DIM}(of 8 GB default)${C_RESET}"
+}
+
+cmd_alarms() {
+    _check_cp
+    header "etcd Alarms"
+
+    local alarms
+    alarms=$(etcd_api "/v3/maintenance/alarm" -X POST -d '{"action":"GET"}')
+
+    local alarm_list
+    alarm_list=$(echo "$alarms" | jq -r '.alarms[]? | "\(.memberID // .member_id): \(.alarm)"' 2>/dev/null)
+
+    if [ -n "$alarm_list" ]; then
+        echo "$alarm_list" | while read -r line; do
+            fail "$line"
+        done
+        echo ""
+        warn "Alarms may prevent writes. Check DB size and run compaction/defrag if needed."
+    else
+        ok "No alarms active"
+    fi
+}
+
+cmd_perf() {
+    _check_cp
+    header "etcd Performance"
+
+    # Simple latency test — write + read a test key
+    local test_key=$(echo -n "/_ndiag_perf_test" | base64)
+    local test_val=$(echo -n "$(date +%s%N)" | base64)
+
+    local start end
+
+    # Write latency
+    start=$(date +%s%N)
+    etcd_api "/v3/kv/put" -X POST -d "{\"key\":\"${test_key}\",\"value\":\"${test_val}\"}" >/dev/null
+    end=$(date +%s%N)
+    local write_ms=$(( (end - start) / 1000000 ))
+
+    # Read latency
+    start=$(date +%s%N)
+    etcd_api "/v3/kv/range" -X POST -d "{\"key\":\"${test_key}\"}" >/dev/null
+    end=$(date +%s%N)
+    local read_ms=$(( (end - start) / 1000000 ))
+
+    # Cleanup
+    etcd_api "/v3/kv/deleterange" -X POST -d "{\"key\":\"${test_key}\"}" >/dev/null
+
+    local write_color="$C_GREEN"
+    [ "$write_ms" -gt 50 ] && write_color="$C_YELLOW"
+    [ "$write_ms" -gt 200 ] && write_color="$C_RED"
+
+    local read_color="$C_GREEN"
+    [ "$read_ms" -gt 20 ] && read_color="$C_YELLOW"
+    [ "$read_ms" -gt 100 ] && read_color="$C_RED"
+
+    echo -e "  Write latency: ${write_color}${write_ms} ms${C_RESET}"
+    echo -e "  Read latency:  ${read_color}${read_ms} ms${C_RESET}"
+    echo ""
+
+    if [ "$write_ms" -gt 100 ]; then
+        warn "Slow writes may indicate disk I/O issues or heavy load"
+        dim "Check: ndiag-disk io, ndiag-cpu load"
+    fi
+
+    # Disk fsync latency via WAL directory
+    header "etcd WAL Disk (fsync test)"
+    local wal_dir="/host/var/lib/etcd/member/wal"
+    if [ -d "$wal_dir" ]; then
+        local fsync_result
+        fsync_result=$(dd if=/dev/zero of="${wal_dir}/_fsync_test" bs=4k count=256 conv=fdatasync 2>&1)
+        rm -f "${wal_dir}/_fsync_test"
+        local fsync_speed
+        fsync_speed=$(echo "$fsync_result" | grep -oP '[\d.]+ [MGKT]B/s' | tail -1)
+        echo -e "  WAL fsync: ${C_BOLD}${fsync_speed:-N/A}${C_RESET} (4K blocks, 1MB total)"
+    else
+        dim "WAL directory not found at ${wal_dir}"
+    fi
+}
+
+cmd_keys() {
+    _check_cp
+    header "etcd Key Distribution"
+
+    # Count keys in major prefixes
+    local prefixes=("/registry/pods" "/registry/services" "/registry/configmaps" "/registry/secrets" "/registry/deployments" "/registry/events" "/registry/leases" "/registry/endpointslices" "/registry/nodes")
+
+    echo -e "  ${C_DIM}PREFIX                          COUNT${C_RESET}"
+    for prefix in "${prefixes[@]}"; do
+        local key_b64
+        key_b64=$(echo -n "$prefix" | base64)
+        local end_b64
+        end_b64=$(echo -n "${prefix}0" | base64)  # range end: prefix + '0' (next char after '/')
+
+        local count
+        count=$(etcd_api "/v3/kv/range" -X POST -d "{\"key\":\"${key_b64}\",\"range_end\":\"${end_b64}\",\"count_only\":true}" | jq -r '.count // 0' 2>/dev/null)
+        printf "  %-30s  %5s\n" "$prefix" "$count"
+    done
+
+    # Total key count
+    echo ""
+    local total_keys
+    total_keys=$(etcd_api "/v3/kv/range" -X POST -d '{"key":"AA==","range_end":"//8=","count_only":true}' | jq -r '.count // "?"' 2>/dev/null)
+    echo -e "  ${C_BOLD}Total keys: ${total_keys}${C_RESET}"
+}
+
+cmd_all() {
+    cmd_health
+    cmd_members
+    cmd_size
+    cmd_alarms
+    cmd_perf
+    cmd_keys
+}
+
+show_help() {
+    cat << 'EOF'
+kdiag-etcd — etcd diagnostics (control plane nodes only)
+
+USAGE
+    kdiag-etcd <subcommand>
+
+SUBCOMMANDS
+    health      Health check, version, process info
+    members     Cluster members, leader identification
+    size        DB size, fragmentation, raft index, quota gauge
+    alarms      Active alarms (NOSPACE, CORRUPT, etc.)
+    perf        Write/read latency test + WAL fsync benchmark
+    keys        Key count by /registry/* prefix
+    all         Run all of the above
+
+EXAMPLES
+    kdiag-etcd health       # Quick health check
+    kdiag-etcd size         # DB growing too fast?
+    kdiag-etcd perf         # Latency benchmark
+    kdiag-etcd keys         # What's filling etcd?
+    kdiag-etcd all | less   # Full diagnostic
+
+NOTES
+    - Only works on control plane nodes (needs etcd client certs)
+    - Uses /host/etc/kubernetes/pki/etcd/ for TLS
+    - perf writes a temporary test key and removes it
+    - Default etcd quota is 8 GB — alarm triggers at limit
+EOF
+}
+
+case "${1:-all}" in
+    health)  cmd_health ;;
+    members) cmd_members ;;
+    size)    cmd_size ;;
+    alarms)  cmd_alarms ;;
+    perf)    cmd_perf ;;
+    keys)    cmd_keys ;;
+    all)     cmd_all ;;
+    -h|--help|help) show_help ;;
+    *) echo "Unknown: $1 — run 'kdiag-etcd --help'"; exit 1 ;;
+esac
