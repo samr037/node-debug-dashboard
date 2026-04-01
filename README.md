@@ -2,7 +2,7 @@
 
 > Hardware monitoring, Kubernetes diagnostics, and container debugging for Kubernetes nodes — accessible as a web dashboard, REST API, and SSH shell.
 
-![Overview Dark](docs/screenshots/overview-dark.png)
+![Dashboard Demo](docs/screenshots/dashboard-demo.gif)
 
 ## Features
 
