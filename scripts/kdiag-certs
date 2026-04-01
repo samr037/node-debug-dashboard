@@ -45,9 +45,9 @@ _cert_info_inline() {
     local sni="${4:-$host}"
 
     local cert_text
-    cert_text=$(echo | timeout 5 openssl s_client -connect "${host}:${port}" -servername "$sni" 2>/dev/null)
+    cert_text=$(echo | timeout 5 openssl s_client -connect "${host}:${port}" -servername "$sni" 2>/dev/null) || true
     local not_after
-    not_after=$(echo "$cert_text" | openssl x509 -noout -enddate 2>/dev/null | sed 's/notAfter=//')
+    not_after=$(echo "$cert_text" | openssl x509 -noout -enddate 2>/dev/null | sed 's/notAfter=//') || true
 
     if [ -z "$not_after" ]; then
         dim "${label}: could not connect"
