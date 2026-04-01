@@ -1,0 +1,281 @@
+#!/bin/bash
+# kdiag-node — Kubernetes node health diagnostics
+# Usage: kdiag-node [subcommand]
+# Subcommands: status, resources, taints, pressure, kubelet, all
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${SCRIPT_DIR}/_kdiag-lib.sh"
+
+cmd_status() {
+    header "Node Status — ${NODE_NAME}"
+    local node_json
+    node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}")
+
+    # Roles
+    local roles
+    roles=$(echo "$node_json" | jq -r '.metadata.labels | to_entries[] | select(.key | startswith("node-role.kubernetes.io/")) | .key | split("/")[1]' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
+    echo -e "  Role:       ${C_BOLD}${roles:-worker}${C_RESET}"
+
+    # Kubernetes version
+    local version
+    version=$(echo "$node_json" | jq -r '.status.nodeInfo.kubeletVersion // "?"' 2>/dev/null)
+    echo -e "  K8s:        ${version}"
+
+    # OS / Container runtime
+    local os_image cr
+    os_image=$(echo "$node_json" | jq -r '.status.nodeInfo.osImage // "?"' 2>/dev/null)
+    cr=$(echo "$node_json" | jq -r '.status.nodeInfo.containerRuntimeVersion // "?"' 2>/dev/null)
+    echo -e "  OS:         ${os_image}"
+    echo -e "  Runtime:    ${cr}"
+
+    # Conditions
+    echo ""
+    echo -e "  ${C_DIM}CONDITION              STATUS   MESSAGE${C_RESET}"
+    echo "$node_json" | jq -r '.status.conditions[]? | "\(.type)\t\(.status)\t\(.message // "")"' 2>/dev/null | \
+    while IFS=$'\t' read -r ctype cstatus cmsg; do
+        local color="$C_GREEN"
+        # Ready=True is good, everything else True is bad
+        if [ "$ctype" = "Ready" ]; then
+            [ "$cstatus" != "True" ] && color="$C_RED"
+        else
+            [ "$cstatus" = "True" ] && color="$C_RED"
+        fi
+        printf "  ${color}%-22s %-8s${C_RESET} %s\n" "$ctype" "$cstatus" "${cmsg:0:60}"
+    done
+
+    # Addresses
+    echo ""
+    echo -e "  ${C_DIM}ADDRESSES${C_RESET}"
+    echo "$node_json" | jq -r '.status.addresses[]? | "  \(.type): \(.address)"' 2>/dev/null
+}
+
+cmd_resources() {
+    header "Resource Allocation — ${NODE_NAME}"
+    local node_json
+    node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}")
+
+    echo -e "  ${C_DIM}RESOURCE       CAPACITY     ALLOCATABLE   USED BY PODS${C_RESET}"
+
+    # Get pod resource requests on this node
+    local pods_json
+    pods_json=$(k8s_api "/api/v1/pods?fieldSelector=spec.nodeName=${NODE_NAME},status.phase=Running")
+
+    local cpu_req mem_req gpu_req pod_count
+    cpu_req=$(echo "$pods_json" | jq '[.items[]?.spec.containers[]?.resources.requests.cpu // "0" | if endswith("m") then (.[:-1] | tonumber) else (tonumber * 1000) end] | add // 0' 2>/dev/null)
+    mem_req=$(echo "$pods_json" | jq '[.items[]?.spec.containers[]?.resources.requests.memory // "0" | if endswith("Mi") then (.[:-2] | tonumber * 1048576) elif endswith("Gi") then (.[:-2] | tonumber * 1073741824) elif endswith("Ki") then (.[:-2] | tonumber * 1024) else tonumber end] | add // 0' 2>/dev/null)
+    gpu_req=$(echo "$pods_json" | jq '[.items[]?.spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add // 0' 2>/dev/null)
+    pod_count=$(echo "$pods_json" | jq '.items | length' 2>/dev/null)
+
+    # Capacity & allocatable
+    local cpu_cap cpu_alloc mem_cap mem_alloc pod_cap gpu_cap
+    cpu_cap=$(echo "$node_json" | jq -r '.status.capacity.cpu // "0"' 2>/dev/null)
+    cpu_alloc=$(echo "$node_json" | jq -r '.status.allocatable.cpu // "0"' 2>/dev/null)
+    mem_cap=$(echo "$node_json" | jq -r '.status.capacity.memory // "0" | if endswith("Ki") then (.[:-2] | tonumber * 1024) else tonumber end' 2>/dev/null)
+    mem_alloc=$(echo "$node_json" | jq -r '.status.allocatable.memory // "0" | if endswith("Ki") then (.[:-2] | tonumber * 1024) else tonumber end' 2>/dev/null)
+    pod_cap=$(echo "$node_json" | jq -r '.status.allocatable.pods // "110"' 2>/dev/null)
+    gpu_cap=$(echo "$node_json" | jq -r '.status.capacity["nvidia.com/gpu"] // "0"' 2>/dev/null)
+
+    local cpu_alloc_m=$((${cpu_alloc%m} * 1000))
+    [ "$cpu_alloc" = "${cpu_alloc%m}" ] && cpu_alloc_m=$((cpu_alloc * 1000))
+
+    # CPU
+    local cpu_pct=0
+    [ "$cpu_alloc_m" -gt 0 ] 2>/dev/null && cpu_pct=$((cpu_req * 100 / cpu_alloc_m))
+    printf "  %-14s %-12s %-13s %sm / %sm " "CPU" "${cpu_cap} cores" "${cpu_alloc} cores" "$cpu_req" "$cpu_alloc_m"
+    pct_bar "$cpu_pct" 15
+    echo ""
+
+    # Memory
+    local mem_pct=0
+    [ "$mem_alloc" -gt 0 ] 2>/dev/null && mem_pct=$((mem_req * 100 / mem_alloc))
+    printf "  %-14s %-12s %-13s %s / %s " "Memory" "$(human_bytes $mem_cap)" "$(human_bytes $mem_alloc)" "$(human_bytes $mem_req)" "$(human_bytes $mem_alloc)"
+    pct_bar "$mem_pct" 15
+    echo ""
+
+    # Pods
+    local pod_pct=0
+    [ "$pod_cap" -gt 0 ] 2>/dev/null && pod_pct=$((pod_count * 100 / pod_cap))
+    printf "  %-14s %-12s %-13s %s / %s " "Pods" "$pod_cap" "$pod_cap" "$pod_count" "$pod_cap"
+    pct_bar "$pod_pct" 15
+    echo ""
+
+    # GPU
+    if [ "$gpu_cap" -gt 0 ] 2>/dev/null; then
+        local gpu_pct=0
+        [ "$gpu_cap" -gt 0 ] && gpu_pct=$((gpu_req * 100 / gpu_cap))
+        printf "  %-14s %-12s %-13s %s / %s " "GPU" "$gpu_cap" "$gpu_cap" "$gpu_req" "$gpu_cap"
+        pct_bar "$gpu_pct" 15
+        echo ""
+    fi
+}
+
+cmd_taints() {
+    header "Taints & Labels — ${NODE_NAME}"
+    local node_json
+    node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}")
+
+    echo -e "  ${C_BOLD}Taints:${C_RESET}"
+    local taints
+    taints=$(echo "$node_json" | jq -r '.spec.taints[]? | "  \(.key)=\(.value // ""):\(.effect)"' 2>/dev/null)
+    if [ -n "$taints" ]; then
+        echo "$taints"
+    else
+        dim "None"
+    fi
+
+    echo ""
+    echo -e "  ${C_BOLD}Labels:${C_RESET}"
+    echo "$node_json" | jq -r '.metadata.labels | to_entries[] | "  \(.key) = \(.value)"' 2>/dev/null | \
+        grep -v 'kubernetes.io/os\|kubernetes.io/arch\|kubernetes.io/hostname' | sort
+
+    echo ""
+    echo -e "  ${C_BOLD}Annotations (non-default):${C_RESET}"
+    echo "$node_json" | jq -r '.metadata.annotations | to_entries[] | select(.key | startswith("node.alpha") or startswith("volumes") | not) | "  \(.key | split("/") | .[-1]) = \(.value[:60])"' 2>/dev/null | head -15
+}
+
+cmd_pressure() {
+    header "Resource Pressure"
+
+    # CPU pressure
+    if [ -f "${HOST_PROC}/pressure/cpu" ]; then
+        echo -e "  ${C_BOLD}CPU Pressure:${C_RESET}"
+        cat "${HOST_PROC}/pressure/cpu" 2>/dev/null | sed 's/^/    /'
+    fi
+
+    # Memory pressure
+    if [ -f "${HOST_PROC}/pressure/memory" ]; then
+        echo -e "  ${C_BOLD}Memory Pressure:${C_RESET}"
+        cat "${HOST_PROC}/pressure/memory" 2>/dev/null | sed 's/^/    /'
+    fi
+
+    # I/O pressure
+    if [ -f "${HOST_PROC}/pressure/io" ]; then
+        echo -e "  ${C_BOLD}I/O Pressure:${C_RESET}"
+        cat "${HOST_PROC}/pressure/io" 2>/dev/null | sed 's/^/    /'
+    fi
+
+    if [ ! -f "${HOST_PROC}/pressure/cpu" ]; then
+        dim "PSI (Pressure Stall Information) not available"
+    fi
+
+    # Node conditions that indicate pressure
+    echo ""
+    header "K8s Pressure Conditions"
+    local node_json
+    node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}")
+    echo "$node_json" | jq -r '.status.conditions[]? | select(.type | test("Pressure|PID")) | "\(.type): \(.status) — \(.message // "no message")"' 2>/dev/null | \
+    while read -r line; do
+        if echo "$line" | grep -q "True"; then
+            fail "$line"
+        else
+            ok "$line"
+        fi
+    done
+}
+
+cmd_kubelet() {
+    header "Kubelet Health"
+
+    # Kubelet process
+    local kubelet_pid
+    kubelet_pid=$(pgrep -f kubelet 2>/dev/null | head -1)
+    if [ -n "$kubelet_pid" ]; then
+        ok "Kubelet running (PID ${kubelet_pid})"
+        local kubelet_mem
+        kubelet_mem=$(ps -p "$kubelet_pid" -o rss= 2>/dev/null | awk '{printf "%.0f", $1/1024}')
+        dim "  Memory: ${kubelet_mem} MB"
+
+        local kubelet_uptime
+        kubelet_uptime=$(ps -p "$kubelet_pid" -o etimes= 2>/dev/null | xargs)
+        [ -n "$kubelet_uptime" ] && dim "  Uptime: $(human_duration $kubelet_uptime)"
+    else
+        fail "Kubelet process not found"
+    fi
+
+    # Kubelet healthz (if accessible)
+    echo ""
+    echo -e "  ${C_BOLD}Component Health:${C_RESET}"
+    for component in kubelet kube-proxy; do
+        local pid
+        pid=$(pgrep -f "$component" 2>/dev/null | head -1)
+        if [ -n "$pid" ]; then
+            local mem
+            mem=$(ps -p "$pid" -o rss= 2>/dev/null | awk '{printf "%.0f", $1/1024}')
+            ok "${component} — PID ${pid}, ${mem} MB"
+        else
+            dim "${component} — not running (may be OK for Talos)"
+        fi
+    done
+
+    # Static pods on CP
+    if is_control_plane; then
+        echo ""
+        echo -e "  ${C_BOLD}Static Pods (control plane):${C_RESET}"
+        for manifest in /host/etc/kubernetes/manifests/*.yaml; do
+            [ -f "$manifest" ] || continue
+            local name
+            name=$(basename "$manifest" .yaml)
+            local running
+            running=$(crictl ps --name "$name" -q 2>/dev/null | head -1)
+            if [ -n "$running" ]; then
+                ok "$name"
+            else
+                fail "$name — not running!"
+            fi
+        done
+    fi
+
+    # Containerd socket
+    echo ""
+    if [ -S "/host/run/containerd/containerd.sock" ]; then
+        ok "containerd socket available"
+    else
+        fail "containerd socket missing!"
+    fi
+}
+
+cmd_all() {
+    cmd_status
+    cmd_resources
+    cmd_taints
+    cmd_pressure
+    cmd_kubelet
+}
+
+show_help() {
+    cat << 'EOF'
+kdiag-node — Kubernetes node health diagnostics
+
+USAGE
+    kdiag-node <subcommand>
+
+SUBCOMMANDS
+    status      Node status, conditions, version, OS, runtime
+    resources   Resource allocation: capacity vs allocatable vs pod requests
+    taints      Taints, labels, and annotations
+    pressure    PSI (CPU/memory/IO pressure) + K8s pressure conditions
+    kubelet     Kubelet + component processes, static pods, containerd
+    all         Run all of the above
+
+EXAMPLES
+    kdiag-node status       # Quick node health check
+    kdiag-node resources    # Am I overcommitted?
+    kdiag-node all | less   # Full node diagnostic
+
+NOTES
+    - Uses the pod's ServiceAccount token to query the K8s API
+    - Resource requests are summed from running pods on this node
+    - PSI requires kernel 4.20+ with CONFIG_PSI=y
+EOF
+}
+
+case "${1:-all}" in
+    status)    cmd_status ;;
+    resources) cmd_resources ;;
+    taints)    cmd_taints ;;
+    pressure)  cmd_pressure ;;
+    kubelet)   cmd_kubelet ;;
+    all)       cmd_all ;;
+    -h|--help|help) show_help ;;
+    *) echo "Unknown: $1 — run 'kdiag-node --help'"; exit 1 ;;
+esac

@@ -1,0 +1,17 @@
+#compdef ndiag-disk
+# Zsh completion for ndiag-disk
+
+_ndiag_disk() {
+    local -a subcommands
+    subcommands=(
+        'health:SMART health for all disks'
+        'io:Live I/O statistics'
+        'usage:Disk space and inode usage'
+        'bench:Quick sequential R/W benchmark'
+        'all:Full disk diagnostic report'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+
+_ndiag_disk "$@"

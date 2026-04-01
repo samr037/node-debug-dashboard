@@ -1,0 +1,142 @@
+#!/bin/bash
+# ndiag-part — Partition diagnostics for Node Debug Dashboard
+# Usage: ndiag-part [subcommand]
+# Subcommands: mounts, lvm, fs, table, all
+
+set -euo pipefail
+
+C_RESET="\033[0m"
+C_BOLD="\033[1m"
+C_CYAN="\033[36m"
+C_GREEN="\033[32m"
+C_YELLOW="\033[33m"
+C_RED="\033[31m"
+C_DIM="\033[2m"
+
+header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
+
+cmd_mounts() {
+    header "Active Mounts"
+    echo -e "${C_DIM}  DEVICE                  MOUNT                          TYPE      OPTIONS${C_RESET}"
+    cat "${HOST_PROC:-/host-proc}/mounts" 2>/dev/null | grep -vE 'proc|sysfs|devpts|cgroup|tmpfs|overlay|shm|mqueue|debugfs|tracefs|securityfs|pstore|bpf|hugetlb|autofs' | \
+    awk '{
+        dev=$1; mount=$2; type=$3; opts=$4
+        # Truncate long options
+        if (length(opts) > 40) opts=substr(opts, 1, 37) "..."
+        printf "  %-24s %-30s %-8s  %s\n", dev, mount, type, opts
+    }'
+
+    echo ""
+    header "Mount Count by Type"
+    cat "${HOST_PROC:-/host-proc}/mounts" 2>/dev/null | awk '{types[$3]++} END {for (t in types) printf "  %-12s %d\n", t, types[t]}' | sort -k2 -rn
+}
+
+cmd_lvm() {
+    header "LVM — Physical Volumes"
+    pvs 2>/dev/null | sed 's/^/  /' || echo -e "  ${C_DIM}No LVM PVs found (or pvs not available)${C_RESET}"
+
+    header "LVM — Volume Groups"
+    vgs 2>/dev/null | sed 's/^/  /' || echo -e "  ${C_DIM}No LVM VGs found${C_RESET}"
+
+    header "LVM — Logical Volumes"
+    lvs 2>/dev/null | sed 's/^/  /' || echo -e "  ${C_DIM}No LVM LVs found${C_RESET}"
+
+    # mdadm RAID check
+    header "Software RAID (mdadm)"
+    if [ -f "/host/proc/mdstat" ]; then
+        cat /host/proc/mdstat 2>/dev/null | sed 's/^/  /'
+    elif [ -f "${HOST_PROC:-/host-proc}/mdstat" ]; then
+        cat "${HOST_PROC:-/host-proc}/mdstat" 2>/dev/null | sed 's/^/  /'
+    else
+        echo -e "  ${C_DIM}No RAID arrays detected${C_RESET}"
+    fi
+}
+
+cmd_fs() {
+    header "Filesystem Details"
+    echo -e "${C_DIM}  NAME         SIZE  TYPE   FSTYPE    LABEL                MOUNT${C_RESET}"
+    lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null | tail -n +2 | \
+    awk '{
+        # Color based on type
+        if ($3 == "disk") color="\033[1m"
+        else if ($3 == "part") color="\033[0m"
+        else if ($3 == "lvm") color="\033[33m"
+        else color="\033[2m"
+        printf "  %s%-12s %5s %-6s %-9s %-20s %s\033[0m\n", color, $1, $2, $3, $4, $5, $6
+    }'
+
+    echo ""
+    header "Filesystem UUIDs"
+    blkid 2>/dev/null | sed 's/^/  /' | head -20 || \
+        echo -e "  ${C_DIM}blkid not available${C_RESET}"
+}
+
+cmd_table() {
+    header "Partition Tables"
+    local disks=$(lsblk -dno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}')
+
+    for disk in $disks; do
+        local dev="/dev/${disk}"
+        local model=$(lsblk -dno MODEL "$dev" 2>/dev/null | xargs)
+        local size=$(lsblk -dno SIZE "$dev" 2>/dev/null)
+        echo -e "  ${C_BOLD}${dev}${C_RESET} — ${model} (${size})"
+
+        # Try gdisk first (GPT), fall back to fdisk
+        local table_type=$(blkid -o value -s PTTYPE "$dev" 2>/dev/null || echo "unknown")
+        echo -e "  ${C_DIM}Table type: ${table_type}${C_RESET}"
+
+        if [ "$table_type" = "gpt" ]; then
+            sgdisk -p "$dev" 2>/dev/null | grep -E '^\s+[0-9]' | sed 's/^/    /' || \
+                fdisk -l "$dev" 2>/dev/null | grep "^/dev" | sed 's/^/    /'
+        else
+            fdisk -l "$dev" 2>/dev/null | grep "^/dev" | sed 's/^/    /'
+        fi
+        echo ""
+    done
+}
+
+cmd_all() {
+    cmd_mounts
+    cmd_fs
+    cmd_table
+    cmd_lvm
+}
+
+show_help() {
+    cat << 'EOF'
+ndiag-part — Partition diagnostics for Kubernetes nodes
+
+USAGE
+    ndiag-part <subcommand>
+
+SUBCOMMANDS
+    mounts     Active mount points (filtered, no pseudo-fs noise)
+    lvm        LVM PVs/VGs/LVs and software RAID status
+    fs         Filesystem tree (lsblk) with labels, UUIDs
+    table      GPT/MBR partition tables for all disks
+    all        Run all of the above
+
+EXAMPLES
+    ndiag-part mounts       # What's mounted where?
+    ndiag-part lvm          # LVM layout
+    ndiag-part fs           # Filesystem overview
+    ndiag-part table        # Raw partition tables
+    ndiag-part all | less   # Full report
+
+NOTES
+    - Filters out pseudo-filesystems (proc, sysfs, cgroup, tmpfs, overlay)
+    - LVM commands (pvs, vgs, lvs) need the lvm2 package
+    - GPT tables use sgdisk, MBR uses fdisk
+    - Reads host mount info from /host-proc/mounts
+EOF
+}
+
+case "${1:-all}" in
+    mounts) cmd_mounts ;;
+    lvm)    cmd_lvm ;;
+    fs)     cmd_fs ;;
+    table)  cmd_table ;;
+    all)    cmd_all ;;
+    -h|--help|help) show_help ;;
+    *) echo "Unknown subcommand: $1"; echo "Run 'ndiag-part --help' for usage"; exit 1 ;;
+esac

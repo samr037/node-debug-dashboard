@@ -6,14 +6,6 @@ SSH_PORT="${SSH_PORT:-2022}"
 SSH_PASSWORD_AUTH="${SSH_PASSWORD_AUTH:-true}"
 SSH_AUTHORIZED_KEYS="${SSH_AUTHORIZED_KEYS:-}"
 
-# Convenience aliases and PATH for host access
-for rcfile in /root/.bashrc /home/debug/.bashrc; do
-    grep -q 'hostns' "$rcfile" 2>/dev/null || {
-        echo "alias hostns='nsenter --target 1 --mount --uts --ipc --net --pid -- /bin/bash'" >> "$rcfile"
-        echo "export PATH=\$PATH:/host/usr/local/bin:/host/usr/bin:/host/bin" >> "$rcfile"
-    }
-done
-
 if [ "$SSH_ENABLED" = "true" ] || [ "$SSH_ENABLED" = "1" ] || [ "$SSH_ENABLED" = "yes" ]; then
     # Generate SSH host keys if missing
     ssh-keygen -A
@@ -60,7 +52,7 @@ fi
 echo "======================================="
 echo " Node Debug Dashboard"
 echo " HTTP dashboard on port 80"
-[ "$SSH_ENABLED" = "true" ] && echo " SSH on port ${SSH_PORT}"
+[ "$SSH_ENABLED" = "true" ] && echo " SSH on port ${SSH_PORT} (zsh + oh-my-zsh)"
 echo " Host filesystem at /host"
 echo "======================================="
 

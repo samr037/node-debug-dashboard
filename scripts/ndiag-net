@@ -1,0 +1,217 @@
+#!/bin/bash
+# ndiag-net — Network diagnostics for Node Debug Dashboard
+# Usage: ndiag-net [subcommand]
+# Subcommands: ifaces, conns, listen, dns, reach, capture, all
+
+set -euo pipefail
+
+C_RESET="\033[0m"
+C_BOLD="\033[1m"
+C_CYAN="\033[36m"
+C_GREEN="\033[32m"
+C_YELLOW="\033[33m"
+C_RED="\033[31m"
+C_DIM="\033[2m"
+
+header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
+
+cmd_ifaces() {
+    header "Network Interfaces"
+    echo -e "${C_DIM}  IFACE           STATE    MTU   IP ADDRESS               MAC${C_RESET}"
+
+    ip -o addr show 2>/dev/null | awk '{
+        iface=$2; gsub(/:$/,"",iface)
+        family=$3; addr=$4
+        if (family == "inet" || family == "inet6") {
+            ifaces[iface] = ifaces[iface] addr " "
+        }
+    }
+    END {
+        for (i in ifaces) print i, ifaces[i]
+    }' | sort | while read -r iface addrs; do
+        local state=$(ip link show "$iface" 2>/dev/null | grep -oP '(?<=state )\w+')
+        local mtu=$(ip link show "$iface" 2>/dev/null | grep -oP '(?<=mtu )\d+')
+        local mac=$(ip link show "$iface" 2>/dev/null | grep -oP 'link/ether \K[\w:]+')
+        local color="$C_GREEN"
+        [ "$state" != "UP" ] && color="$C_RED"
+        printf "  %-16s ${color}%-8s${C_RESET} %-5s %-24s %s\n" "$iface" "$state" "$mtu" "$(echo $addrs | cut -d' ' -f1)" "$mac"
+    done
+
+    # Error counters
+    echo ""
+    header "Interface Errors & Drops"
+    echo -e "${C_DIM}  IFACE           RX_ERR  RX_DROP  TX_ERR  TX_DROP${C_RESET}"
+    for iface in $(ls /host/sys/class/net/ 2>/dev/null); do
+        local rx_err=$(cat /host/sys/class/net/$iface/statistics/rx_errors 2>/dev/null || echo 0)
+        local rx_drop=$(cat /host/sys/class/net/$iface/statistics/rx_dropped 2>/dev/null || echo 0)
+        local tx_err=$(cat /host/sys/class/net/$iface/statistics/tx_errors 2>/dev/null || echo 0)
+        local tx_drop=$(cat /host/sys/class/net/$iface/statistics/tx_dropped 2>/dev/null || echo 0)
+        local color="$C_GREEN"
+        [ "$rx_err" -gt 0 ] || [ "$tx_err" -gt 0 ] && color="$C_YELLOW"
+        [ "$rx_err" -gt 100 ] || [ "$tx_err" -gt 100 ] && color="$C_RED"
+        printf "  %-16s ${color}%6d  %7d  %6d  %7d${C_RESET}\n" "$iface" "$rx_err" "$rx_drop" "$tx_err" "$tx_drop"
+    done
+
+    # Speed/duplex for physical interfaces
+    echo ""
+    header "Link Speed"
+    for iface in $(ls /host/sys/class/net/ 2>/dev/null); do
+        local speed=$(ethtool "$iface" 2>/dev/null | grep -i speed | awk '{print $2}')
+        local duplex=$(ethtool "$iface" 2>/dev/null | grep -i duplex | awk '{print $2}')
+        [ -n "$speed" ] && [ "$speed" != "Unknown!" ] && \
+            printf "  %-16s %s %s\n" "$iface" "$speed" "$duplex"
+    done
+}
+
+cmd_conns() {
+    header "Active Connections (top 30)"
+    echo -e "${C_DIM}  PROTO  LOCAL                    REMOTE                   STATE        PID/PROGRAM${C_RESET}"
+    ss -tnp 2>/dev/null | tail -n +2 | head -30 | awk '{
+        state=$1; local=$4; remote=$5; proc=$6
+        gsub(/users:\(\("/, "", proc); gsub(/",pid=.*/, "", proc)
+        printf "  TCP   %-24s %-24s %-12s %s\n", local, remote, state, proc
+    }'
+    echo ""
+    local total=$(ss -tn 2>/dev/null | tail -n +2 | wc -l)
+    local estab=$(ss -tn state established 2>/dev/null | tail -n +2 | wc -l)
+    local tw=$(ss -tn state time-wait 2>/dev/null | tail -n +2 | wc -l)
+    echo -e "  Total: ${C_BOLD}${total}${C_RESET}  Established: ${C_GREEN}${estab}${C_RESET}  Time-Wait: ${C_DIM}${tw}${C_RESET}"
+}
+
+cmd_listen() {
+    header "Listening Ports"
+    echo -e "${C_DIM}  PROTO  ADDRESS                  PORT   PID/PROGRAM${C_RESET}"
+    (ss -tlnp 2>/dev/null; ss -ulnp 2>/dev/null) | tail -n +2 | sort -t: -k2 -n | \
+        awk '!seen[$4]++ {
+            proto=$1; addr=$4; proc=$6
+            gsub(/users:\(\("/, "", proc); gsub(/",pid=.*/, "", proc)
+            split(addr, a, ":")
+            port=a[length(a)]
+            sub(":"port, "", addr)
+            if (addr == "" || addr == "*") addr="0.0.0.0"
+            printf "  %-5s %-24s %-6s %s\n", proto, addr, port, proc
+        }'
+}
+
+cmd_dns() {
+    header "DNS Resolution Tests"
+    local tests=("google.com" "kubernetes.default.svc" "1.1.1.1")
+    for target in "${tests[@]}"; do
+        local start=$(date +%s%N)
+        local result=$(dig +short "$target" 2>/dev/null | head -1)
+        local end=$(date +%s%N)
+        local ms=$(( (end - start) / 1000000 ))
+        if [ -n "$result" ]; then
+            echo -e "  ${C_GREEN}✓${C_RESET} ${target} → ${result} ${C_DIM}(${ms}ms)${C_RESET}"
+        else
+            echo -e "  ${C_RED}✗${C_RESET} ${target} ${C_DIM}(${ms}ms)${C_RESET}"
+        fi
+    done
+
+    echo ""
+    header "DNS Configuration"
+    cat /etc/resolv.conf 2>/dev/null | grep -v '^#' | grep -v '^$' | sed 's/^/  /'
+}
+
+cmd_reach() {
+    header "Connectivity Checks"
+
+    # Internet
+    local start=$(date +%s%N)
+    if curl -sf --max-time 5 -o /dev/null https://1.1.1.1 2>/dev/null; then
+        local ms=$(( ($(date +%s%N) - start) / 1000000 ))
+        echo -e "  ${C_GREEN}✓${C_RESET} Internet (HTTPS)    ${C_DIM}${ms}ms${C_RESET}"
+    else
+        echo -e "  ${C_RED}✗${C_RESET} Internet (HTTPS)"
+    fi
+
+    # K8s API
+    start=$(date +%s%N)
+    if curl -sk --max-time 5 -o /dev/null \
+        --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+        -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null)" \
+        https://kubernetes.default.svc/api/v1 2>/dev/null; then
+        local ms=$(( ($(date +%s%N) - start) / 1000000 ))
+        echo -e "  ${C_GREEN}✓${C_RESET} Kubernetes API      ${C_DIM}${ms}ms${C_RESET}"
+    else
+        echo -e "  ${C_RED}✗${C_RESET} Kubernetes API"
+    fi
+
+    # DNS
+    start=$(date +%s%N)
+    if dig +short google.com @8.8.8.8 +time=3 &>/dev/null; then
+        local ms=$(( ($(date +%s%N) - start) / 1000000 ))
+        echo -e "  ${C_GREEN}✓${C_RESET} DNS (8.8.8.8)       ${C_DIM}${ms}ms${C_RESET}"
+    else
+        echo -e "  ${C_RED}✗${C_RESET} DNS (8.8.8.8)"
+    fi
+
+    # Gateway
+    local gw=$(ip route 2>/dev/null | awk '/default/{print $3}' | head -1)
+    if [ -n "$gw" ]; then
+        start=$(date +%s%N)
+        if ping -c1 -W2 "$gw" &>/dev/null; then
+            local ms=$(( ($(date +%s%N) - start) / 1000000 ))
+            echo -e "  ${C_GREEN}✓${C_RESET} Gateway ($gw)  ${C_DIM}${ms}ms${C_RESET}"
+        else
+            echo -e "  ${C_RED}✗${C_RESET} Gateway ($gw)"
+        fi
+    fi
+}
+
+cmd_capture() {
+    header "Quick Packet Capture (50 packets)"
+    echo -e "${C_DIM}  Press Ctrl+C to stop early${C_RESET}"
+    echo ""
+    tcpdump -i any -nn -c 50 2>/dev/null | sed 's/^/  /' || \
+        echo -e "  ${C_RED}tcpdump failed — need CAP_NET_RAW${C_RESET}"
+}
+
+cmd_all() {
+    cmd_ifaces
+    cmd_conns
+    cmd_listen
+    cmd_dns
+    cmd_reach
+}
+
+show_help() {
+    cat << 'EOF'
+ndiag-net — Network diagnostics for Kubernetes nodes
+
+USAGE
+    ndiag-net <subcommand>
+
+SUBCOMMANDS
+    ifaces     Interface list, errors, drops, speed/duplex
+    conns      Active TCP connections (top 30)
+    listen     All listening TCP/UDP ports with processes
+    dns        DNS resolution tests + /etc/resolv.conf
+    reach      Connectivity checks (internet, K8s API, DNS, gateway)
+    capture    Quick 50-packet tcpdump capture
+    all        Run ifaces + conns + listen + dns + reach
+
+EXAMPLES
+    ndiag-net listen          # What's listening?
+    ndiag-net reach           # Is the node healthy?
+    ndiag-net capture         # Quick traffic sample
+    ndiag-net ifaces | less   # Detailed interface report
+
+NOTES
+    - capture requires CAP_NET_RAW (privileged container)
+    - K8s API check uses the pod's service account token
+    - For tshark analysis: tshark -i any -c 100 -w /tmp/cap.pcap
+EOF
+}
+
+case "${1:-all}" in
+    ifaces)  cmd_ifaces ;;
+    conns)   cmd_conns ;;
+    listen)  cmd_listen ;;
+    dns)     cmd_dns ;;
+    reach)   cmd_reach ;;
+    capture) cmd_capture ;;
+    all)     cmd_all ;;
+    -h|--help|help) show_help ;;
+    *) echo "Unknown subcommand: $1"; echo "Run 'ndiag-net --help' for usage"; exit 1 ;;
+esac

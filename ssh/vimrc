@@ -1,0 +1,124 @@
+" Node Debug Dashboard — Vim Configuration
+" Optimized for debugging Kubernetes nodes
+
+" === Core ===
+set nocompatible
+filetype plugin indent on
+syntax on
+
+" === Display ===
+set number
+set relativenumber
+set cursorline
+set showmatch
+set laststatus=2
+set ruler
+set showcmd
+set wildmenu
+set wildmode=list:longest,full
+set scrolloff=5
+set sidescrolloff=8
+set signcolumn=auto
+
+" === Status line (no plugin needed) ===
+set statusline=
+set statusline+=\ %{toupper(mode())}
+set statusline+=\ │\ %f
+set statusline+=\ %m%r
+set statusline+=%=
+set statusline+=\ %{&filetype!=''?&filetype:'none'}
+set statusline+=\ │\ %l:%c
+set statusline+=\ │\ %p%%\
+
+" === Colors ===
+set background=dark
+set termguicolors
+colorscheme slate
+hi StatusLine   ctermbg=236 ctermfg=252 guibg=#303030 guifg=#d0d0d0
+hi StatusLineNC ctermbg=234 ctermfg=245 guibg=#1c1c1c guifg=#8a8a8a
+hi CursorLine   ctermbg=235 cterm=none  guibg=#262626
+hi LineNr       ctermfg=240             guifg=#585858
+hi CursorLineNr ctermfg=214             guifg=#ffaf00
+
+" === Search ===
+set hlsearch
+set incsearch
+set ignorecase
+set smartcase
+nnoremap <Esc><Esc> :nohlsearch<CR>
+
+" === Indentation ===
+set expandtab
+set tabstop=4
+set shiftwidth=4
+set softtabstop=4
+set smartindent
+set autoindent
+
+" === Behavior ===
+set hidden
+set backspace=indent,eol,start
+set mouse=a
+set clipboard=unnamedplus
+set encoding=utf-8
+set fileencoding=utf-8
+set updatetime=300
+set timeoutlen=500
+set splitbelow
+set splitright
+set noerrorbells
+set novisualbell
+
+" === File handling ===
+set noswapfile
+set nobackup
+set nowritebackup
+set autoread
+
+" === Key mappings ===
+let mapleader = " "
+
+" Quick save/quit
+nnoremap <leader>w :w<CR>
+nnoremap <leader>q :q<CR>
+nnoremap <leader>x :x<CR>
+
+" Window navigation
+nnoremap <C-h> <C-w>h
+nnoremap <C-j> <C-w>j
+nnoremap <C-k> <C-w>k
+nnoremap <C-l> <C-w>l
+
+" Buffer navigation
+nnoremap <leader>bn :bnext<CR>
+nnoremap <leader>bp :bprev<CR>
+nnoremap <leader>bd :bdelete<CR>
+nnoremap <leader>bl :ls<CR>
+
+" Tab navigation
+nnoremap <leader>tn :tabnew<CR>
+nnoremap <leader>tc :tabclose<CR>
+nnoremap gt :tabnext<CR>
+nnoremap gT :tabprev<CR>
+
+" Move lines up/down
+nnoremap <A-j> :m .+1<CR>==
+nnoremap <A-k> :m .-2<CR>==
+vnoremap <A-j> :m '>+1<CR>gv=gv
+vnoremap <A-k> :m '<-2<CR>gv=gv
+
+" Quick access to common debug files
+nnoremap <leader>fh :e /host/<CR>
+nnoremap <leader>fp :e /host-proc/<CR>
+nnoremap <leader>fl :e /host/var/log/<CR>
+
+" YAML settings (common for K8s)
+autocmd FileType yaml setlocal ts=2 sw=2 sts=2 expandtab
+autocmd FileType json setlocal ts=2 sw=2 sts=2 expandtab
+
+" Highlight trailing whitespace
+highlight ExtraWhitespace ctermbg=red guibg=red
+match ExtraWhitespace /\s\+$/
+
+" Remember cursor position
+autocmd BufReadPost * if line("'\"") > 1 && line("'\"") <= line("$") | exe "normal! g'\"" | endif

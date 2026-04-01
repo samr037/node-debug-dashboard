@@ -1,0 +1,15 @@
+#compdef kdiag-node
+_kdiag_node() {
+    local -a subcommands
+    subcommands=(
+        'status:Node status, conditions, version, runtime'
+        'resources:Resource allocation (capacity vs requests)'
+        'taints:Taints, labels, and annotations'
+        'pressure:PSI pressure + K8s pressure conditions'
+        'kubelet:Kubelet + component processes, static pods'
+        'all:Full node diagnostic report'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+_kdiag_node "$@"

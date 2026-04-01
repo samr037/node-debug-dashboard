@@ -1,0 +1,232 @@
+#!/bin/bash
+# kdiag-certs — Kubernetes certificate audit
+# Usage: kdiag-certs [subcommand]
+# Subcommands: k8s, etcd, sa, tls, all
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${SCRIPT_DIR}/_kdiag-lib.sh"
+
+_cert_info() {
+    local cert_file="$1"
+    local label="$2"
+    if [ ! -f "$cert_file" ]; then
+        dim "${label}: not found"
+        return
+    fi
+
+    local subject issuer not_after not_before
+    subject=$(openssl x509 -in "$cert_file" -noout -subject 2>/dev/null | sed 's/subject=//')
+    issuer=$(openssl x509 -in "$cert_file" -noout -issuer 2>/dev/null | sed 's/issuer=//')
+    not_before=$(openssl x509 -in "$cert_file" -noout -startdate 2>/dev/null | sed 's/notBefore=//')
+    not_after=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | sed 's/notAfter=//')
+
+    # Days until expiry
+    local exp_epoch now_epoch days_left
+    exp_epoch=$(date -d "$not_after" +%s 2>/dev/null || date -j -f "%b %d %T %Y %Z" "$not_after" +%s 2>/dev/null || echo 0)
+    now_epoch=$(date +%s)
+    days_left=$(( (exp_epoch - now_epoch) / 86400 ))
+
+    local color="$C_GREEN"
+    local icon="✓"
+    if [ "$days_left" -lt 30 ] 2>/dev/null; then
+        color="$C_RED"; icon="✗"
+    elif [ "$days_left" -lt 90 ] 2>/dev/null; then
+        color="$C_YELLOW"; icon="⚠"
+    fi
+
+    printf "  ${color}${icon}${C_RESET} %-32s ${color}%4dd${C_RESET}  %s\n" "$label" "$days_left" "$subject"
+}
+
+_cert_info_inline() {
+    # For certs served via TLS (not on disk)
+    local host="$1"
+    local port="$2"
+    local label="$3"
+    local sni="${4:-$host}"
+
+    local cert_text
+    cert_text=$(echo | timeout 5 openssl s_client -connect "${host}:${port}" -servername "$sni" 2>/dev/null)
+    local not_after
+    not_after=$(echo "$cert_text" | openssl x509 -noout -enddate 2>/dev/null | sed 's/notAfter=//')
+
+    if [ -z "$not_after" ]; then
+        dim "${label}: could not connect"
+        return
+    fi
+
+    local subject
+    subject=$(echo "$cert_text" | openssl x509 -noout -subject 2>/dev/null | sed 's/subject=//')
+
+    local exp_epoch now_epoch days_left
+    exp_epoch=$(date -d "$not_after" +%s 2>/dev/null || echo 0)
+    now_epoch=$(date +%s)
+    days_left=$(( (exp_epoch - now_epoch) / 86400 ))
+
+    local color="$C_GREEN"
+    local icon="✓"
+    if [ "$days_left" -lt 30 ] 2>/dev/null; then
+        color="$C_RED"; icon="✗"
+    elif [ "$days_left" -lt 90 ] 2>/dev/null; then
+        color="$C_YELLOW"; icon="⚠"
+    fi
+
+    printf "  ${color}${icon}${C_RESET} %-32s ${color}%4dd${C_RESET}  %s\n" "$label" "$days_left" "$subject"
+}
+
+cmd_k8s() {
+    header "Kubernetes PKI Certificates"
+    echo -e "  ${C_DIM}STATUS  NAME                             EXPIRY  SUBJECT${C_RESET}"
+
+    local pki_dir="/host/etc/kubernetes/pki"
+    if [ ! -d "$pki_dir" ]; then
+        dim "K8s PKI directory not found (may not be a control plane)"
+        dim "Checking live API server cert instead..."
+        echo ""
+        _cert_info_inline "kubernetes.default.svc" "443" "apiserver (live)" "kubernetes"
+        return
+    fi
+
+    for cert in "$pki_dir"/*.crt; do
+        [ -f "$cert" ] || continue
+        local name
+        name=$(basename "$cert" .crt)
+        _cert_info "$cert" "$name"
+    done
+}
+
+cmd_etcd() {
+    header "etcd Certificates"
+    echo -e "  ${C_DIM}STATUS  NAME                             EXPIRY  SUBJECT${C_RESET}"
+
+    local etcd_dir="/host/etc/kubernetes/pki/etcd"
+    if [ ! -d "$etcd_dir" ]; then
+        dim "etcd PKI directory not found — not a control plane node"
+        return
+    fi
+
+    for cert in "$etcd_dir"/*.crt; do
+        [ -f "$cert" ] || continue
+        local name
+        name="etcd/$(basename "$cert" .crt)"
+        _cert_info "$cert" "$name"
+    done
+}
+
+cmd_sa() {
+    header "ServiceAccount Token"
+
+    local token_file="/var/run/secrets/kubernetes.io/serviceaccount/token"
+    if [ ! -f "$token_file" ]; then
+        fail "No SA token mounted"
+        return
+    fi
+
+    # JWT decode (header.payload.signature)
+    local payload
+    payload=$(cat "$token_file" | cut -d. -f2 | base64 -d 2>/dev/null || cat "$token_file" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null)
+
+    local sa_name sa_ns exp_epoch now_epoch days_left iat
+    sa_name=$(echo "$payload" | jq -r '.["kubernetes.io/serviceaccount/service-account.name"] // "?"' 2>/dev/null)
+    sa_ns=$(echo "$payload" | jq -r '.["kubernetes.io/serviceaccount/namespace"] // "?"' 2>/dev/null)
+    exp_epoch=$(echo "$payload" | jq -r '.exp // 0' 2>/dev/null)
+    iat=$(echo "$payload" | jq -r '.iat // 0' 2>/dev/null)
+    now_epoch=$(date +%s)
+
+    echo -e "  SA:          ${C_BOLD}${sa_ns}/${sa_name}${C_RESET}"
+
+    if [ "$exp_epoch" -gt 0 ] 2>/dev/null; then
+        days_left=$(( (exp_epoch - now_epoch) / 86400 ))
+        local color="$C_GREEN"
+        [ "$days_left" -lt 7 ] && color="$C_YELLOW"
+        [ "$days_left" -lt 1 ] && color="$C_RED"
+        local exp_date
+        exp_date=$(date -d "@${exp_epoch}" '+%Y-%m-%d %H:%M' 2>/dev/null || date -r "$exp_epoch" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "?")
+        echo -e "  Expires:     ${color}${exp_date} (${days_left}d left)${C_RESET}"
+    else
+        echo -e "  Expires:     ${C_DIM}never (long-lived token)${C_RESET}"
+    fi
+
+    if [ "$iat" -gt 0 ] 2>/dev/null; then
+        local iat_date
+        iat_date=$(date -d "@${iat}" '+%Y-%m-%d %H:%M' 2>/dev/null || date -r "$iat" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "?")
+        echo -e "  Issued:      ${iat_date}"
+    fi
+
+    # Test the token
+    echo ""
+    local test
+    test=$(k8s_api "/api/v1/nodes/${NODE_NAME}" 2>/dev/null)
+    if echo "$test" | jq -e '.metadata.name' &>/dev/null; then
+        ok "Token is valid — can read node info"
+    else
+        local reason
+        reason=$(echo "$test" | jq -r '.reason // .message // "unknown"' 2>/dev/null)
+        fail "Token test failed: ${reason}"
+    fi
+}
+
+cmd_tls() {
+    header "Live TLS Endpoints"
+    echo -e "  ${C_DIM}STATUS  ENDPOINT                         EXPIRY  SUBJECT${C_RESET}"
+
+    # K8s API server
+    _cert_info_inline "kubernetes.default.svc" "443" "kube-apiserver" "kubernetes"
+
+    # etcd (if CP)
+    if is_control_plane; then
+        _cert_info_inline "127.0.0.1" "2379" "etcd-client"
+        _cert_info_inline "127.0.0.1" "2380" "etcd-peer"
+    fi
+
+    # Kubelet API
+    _cert_info_inline "127.0.0.1" "10250" "kubelet"
+}
+
+cmd_all() {
+    cmd_k8s
+    cmd_etcd
+    cmd_sa
+    cmd_tls
+}
+
+show_help() {
+    cat << 'EOF'
+kdiag-certs — Kubernetes certificate audit
+
+USAGE
+    kdiag-certs <subcommand>
+
+SUBCOMMANDS
+    k8s        Kubernetes PKI certs (/etc/kubernetes/pki/*.crt)
+    etcd       etcd certs (/etc/kubernetes/pki/etcd/*.crt)
+    sa         ServiceAccount token decode + validity test
+    tls        Live TLS endpoint cert check (apiserver, etcd, kubelet)
+    all        Run all of the above
+
+EXAMPLES
+    kdiag-certs all         # Full cert audit
+    kdiag-certs sa          # Check SA token expiry
+    kdiag-certs tls         # Check live endpoints
+
+COLOR CODING
+    ✓ green   — >90 days until expiry
+    ⚠ yellow  — 30-90 days until expiry
+    ✗ red     — <30 days until expiry
+
+NOTES
+    - k8s/etcd subcommands read certs from /host/etc/kubernetes/pki/
+    - tls subcommand connects to live endpoints via openssl s_client
+    - SA token is decoded as JWT to show namespace/name/expiry
+    - On worker nodes, k8s and etcd may show fewer certs
+EOF
+}
+
+case "${1:-all}" in
+    k8s)  cmd_k8s ;;
+    etcd) cmd_etcd ;;
+    sa)   cmd_sa ;;
+    tls)  cmd_tls ;;
+    all)  cmd_all ;;
+    -h|--help|help) show_help ;;
+    *) echo "Unknown: $1 — run 'kdiag-certs --help'"; exit 1 ;;
+esac
