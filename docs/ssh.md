@@ -2,6 +2,8 @@
 
 The Node Debug Dashboard includes an SSH server (port 2022) with **zsh + oh-my-zsh**, 200+ pre-installed diagnostic tools, and custom diagnostic scripts — turning every Kubernetes node into a full debugging workstation.
 
+![MOTD](screenshots/ssh-motd.png)
+
 ## Connecting
 
 ```bash
@@ -115,6 +117,8 @@ Type `aliases` for the full list, or `help-ndiag` for diagnostic script docs.
 
 Five hardware diagnostic scripts are included, each with subcommands and built-in help. Tab completion works for all subcommands.
 
+![ndiag-cpu + ndiag-mem](screenshots/ssh-ndiag-hw.png)
+
 ### ndiag-cpu
 
 CPU diagnostics — frequency, load, top consumers, thermal throttling.
@@ -186,6 +190,14 @@ ndiag-part --help      # Full documentation
 ## Kubernetes Diagnostic Scripts
 
 Six `kdiag-*` scripts provide deep K8s visibility from inside the node. All use the pod's ServiceAccount token and (on control plane nodes) direct etcd client certs.
+
+| kdiag-node | kdiag-etcd (CP) |
+|---|---|
+| ![kdiag-node](screenshots/ssh-kdiag-node.png) | ![kdiag-etcd](screenshots/ssh-kdiag-etcd.png) |
+
+| kdiag-certs | kdiag-services |
+|---|---|
+| ![kdiag-certs](screenshots/ssh-kdiag-certs.png) | ![kdiag-services](screenshots/ssh-kdiag-services.png) |
 
 ### kdiag-node
 
