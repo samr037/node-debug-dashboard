@@ -77,28 +77,46 @@ cmd_k8s() {
     header "Kubernetes PKI Certificates"
     echo -e "  ${C_DIM}STATUS  NAME                             EXPIRY  SUBJECT${C_RESET}"
 
-    local pki_dir="/host/etc/kubernetes/pki"
-    if [ ! -d "$pki_dir" ]; then
-        dim "K8s PKI directory not found (may not be a control plane)"
+    # Find certs — Talos stores them under /system/secrets/kubernetes/
+    local found=0
+
+    # Talos: nested dirs per component
+    if [ -d "/host/system/secrets/kubernetes" ]; then
+        find /host/system/secrets/kubernetes -name "*.crt" 2>/dev/null | sort | while read -r cert; do
+            local rel="${cert#/host/system/secrets/kubernetes/}"
+            local label="${rel%.crt}"
+            _cert_info "$cert" "$label"
+        done
+        found=1
+    fi
+
+    # kubeadm: flat /etc/kubernetes/pki/
+    if [ -d "/host/etc/kubernetes/pki" ]; then
+        for cert in /host/etc/kubernetes/pki/*.crt; do
+            [ -f "$cert" ] || continue
+            _cert_info "$cert" "$(basename "$cert" .crt)"
+        done
+        found=1
+    fi
+
+    if [ "$found" = "0" ]; then
+        dim "K8s PKI directory not found"
         dim "Checking live API server cert instead..."
         echo ""
         _cert_info_inline "kubernetes.default.svc" "443" "apiserver (live)" "kubernetes"
-        return
     fi
-
-    for cert in "$pki_dir"/*.crt; do
-        [ -f "$cert" ] || continue
-        local name
-        name=$(basename "$cert" .crt)
-        _cert_info "$cert" "$name"
-    done
 }
 
 cmd_etcd() {
     header "etcd Certificates"
     echo -e "  ${C_DIM}STATUS  NAME                             EXPIRY  SUBJECT${C_RESET}"
 
-    local etcd_dir="/host/etc/kubernetes/pki/etcd"
+    # Talos: /host/system/secrets/etcd/
+    local etcd_dir="/host/system/secrets/etcd"
+    if [ ! -d "$etcd_dir" ]; then
+        # kubeadm fallback
+        etcd_dir="/host/etc/kubernetes/pki/etcd"
+    fi
     if [ ! -d "$etcd_dir" ]; then
         dim "etcd PKI directory not found — not a control plane node"
         return
