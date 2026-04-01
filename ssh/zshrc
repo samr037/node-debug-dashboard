@@ -8,6 +8,11 @@ ZSH_DISABLE_COMPFIX="true"
 DISABLE_AUTO_UPDATE="true"
 DISABLE_UPDATE_PROMPT="true"
 plugins=(git docker kubectl colored-man-pages command-not-found zsh-autosuggestions zsh-syntax-highlighting)
+
+# Add custom completions to fpath BEFORE oh-my-zsh runs compinit
+[[ -d /opt/node-dashboard/ssh/completions ]] && fpath=(/opt/node-dashboard/ssh/completions $fpath)
+[[ -d /usr/local/share/zsh/site-functions ]] && fpath=(/usr/local/share/zsh/site-functions $fpath)
+
 source "$ZSH/oh-my-zsh.sh"
 
 # === Prompt context — show user@node ===
@@ -42,15 +47,11 @@ setopt AUTO_PUSHD
 setopt PUSHD_IGNORE_DUPS
 setopt PUSHD_SILENT
 
-# === Completion ===
-autoload -Uz compinit && compinit
+# === Completion (oh-my-zsh already calls compinit) ===
 zstyle ':completion:*' menu select
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
 zstyle ':completion:*:descriptions' format '%B%F{cyan}── %d ──%f%b'
 zstyle ':completion:*:warnings' format '%F{red}No matches%f'
-
-# Load ndiag completions
-[[ -d /opt/node-dashboard/ssh/completions ]] && fpath=(/opt/node-dashboard/ssh/completions $fpath) && compinit
 
 # ─── Host Namespace ───
 alias hostns='nsenter --target 1 --mount --uts --ipc --net --pid -- /bin/bash'
