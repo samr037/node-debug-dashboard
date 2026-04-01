@@ -26,7 +26,6 @@ cmd_health() {
 
     for disk in $disks; do
         local dev="/dev/${disk}"
-        [ -b "/host/dev/${disk}" ] && dev="/host/dev/${disk}"
         local model=$(lsblk -dno MODEL "/dev/${disk}" 2>/dev/null | xargs)
         local size=$(lsblk -dno SIZE "/dev/${disk}" 2>/dev/null)
 
@@ -62,9 +61,9 @@ cmd_health() {
 cmd_io() {
     header "I/O Statistics"
 
-    # Current I/O from /proc/diskstats
+    # Current I/O from /proc/diskstats (skip loop devices)
     echo -e "${C_DIM}  DISK       READ/s    WRITE/s    READ KB/s  WRITE KB/s${C_RESET}"
-    local disks=$(lsblk -dno NAME 2>/dev/null)
+    local disks=$(lsblk -dno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}')
     for disk in $disks; do
         local stats1=$(awk -v d="$disk" '$3==d {print $4, $6, $8}' "${HOST_PROC:-/host-proc}/diskstats" 2>/dev/null)
         [ -z "$stats1" ] && continue
@@ -86,14 +85,14 @@ cmd_io() {
     # iostat if available
     echo ""
     header "iostat Snapshot"
-    iostat -xd 1 2 2>/dev/null | tail -n +4 | grep -v '^$' | head -20 | sed 's/^/  /' || \
+    iostat -xd 1 2 2>/dev/null | tail -n +4 | grep -vE '^$|^loop' | head -20 | sed 's/^/  /' || \
         echo -e "  ${C_DIM}iostat not available${C_RESET}"
 }
 
 cmd_usage() {
     header "Disk Space Usage"
     echo -e "${C_DIM}  FILESYSTEM                    SIZE   USED  AVAIL  USE%  MOUNT${C_RESET}"
-    df -h 2>/dev/null | grep -vE 'tmpfs|overlay|shm|Filesystem' | sort -k5 -rn | \
+    df -h 2>/dev/null | grep -vE 'tmpfs|overlay|shm|Filesystem|^none|^rootfs' | sort -k5 -rn | \
     while read -r fs size used avail pct mount; do
         local num=${pct%\%}
         local color="$C_GREEN"
@@ -104,7 +103,7 @@ cmd_usage() {
 
     echo ""
     header "Inode Usage (non-trivial)"
-    df -ih 2>/dev/null | grep -vE 'tmpfs|overlay|shm|Filesystem' | awk '$5+0 > 10 {
+    df -ih 2>/dev/null | grep -vE 'tmpfs|overlay|shm|Filesystem|^none|^rootfs' | awk '$5+0 > 10 {
         printf "  %-30s %5s  %5s  %5s  %4s  %s\n", $1, $2, $3, $4, $5, $6
     }'
 }
