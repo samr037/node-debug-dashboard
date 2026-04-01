@@ -112,16 +112,21 @@ cmd_table() {
         return
     fi
     header "Partition Tables"
-    local disks=$(lsblk -dno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}')
+    local disks=$(lsblk -dno NAME,TYPE,SIZE 2>/dev/null | awk '$2=="disk" && $3!="0B" && $3!="0"{print $1}')
 
     for disk in $disks; do
         local dev="/dev/${disk}"
         local model=$(lsblk -dno MODEL "$dev" 2>/dev/null | xargs)
         local size=$(lsblk -dno SIZE "$dev" 2>/dev/null)
+
+        # Skip virtual/empty disks
+        [[ -z "$model" || "$model" == *VIRTUAL* || "$model" == *"Storage Device"* ]] && continue
+
         echo -e "  ${C_BOLD}${dev}${C_RESET} — ${model} (${size})"
 
         # Try gdisk first (GPT), fall back to fdisk
-        local table_type=$(blkid -o value -s PTTYPE "$dev" 2>/dev/null || echo "unknown")
+        local table_type
+        table_type=$(blkid -o value -s PTTYPE "$dev" 2>/dev/null) || table_type="unknown"
         echo -e "  ${C_DIM}Table type: ${table_type}${C_RESET}"
 
         if [ "$table_type" = "gpt" ]; then
