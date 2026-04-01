@@ -105,32 +105,74 @@ cmd_dimms() {
         return
     fi
 
-    echo "$output" | awk '
-    /^Memory Device$/ {count++; size=""; type=""; speed=""; loc=""; mfr=""}
-    /^\tSize:/ {size=$2" "$3}
-    /^\tType:/ {type=$2}
-    /^\tConfigured Memory Speed:/ {speed=$4" "$5}
-    /^\tLocator:/ {loc=$2}
-    /^\tManufacturer:/ {mfr=$2}
-    /^\tPart Number:/ {
-        part=$2
-        if (size != "" && size != "No") {
-            printf "  %-12s %-8s %-6s %-12s %-10s %s\n", loc, size, type, speed, mfr, part
-        }
-    }
-    '
+    # Parse each Memory Device block
+    local in_dev=0 size="" type="" speed="" loc="" mfr="" serial="" part="" rank="" form="" voltage="" width=""
+    while IFS= read -r line; do
+        case "$line" in
+            "Memory Device")
+                # Print previous device if it had a size
+                if [ -n "$size" ] && [ "$size" != "No Module Installed" ]; then
+                    echo -e "  ${C_BOLD}${loc}${C_RESET}  ${C_WHITE}${size}${C_RESET}  ${type}  ${speed}"
+                    [ -n "$mfr" ] && echo -e "    ${C_DIM}Manufacturer:${C_RESET}  $mfr"
+                    [ -n "$part" ] && echo -e "    ${C_DIM}Part Number:${C_RESET}   $part"
+                    [ -n "$serial" ] && echo -e "    ${C_DIM}Serial:${C_RESET}        $serial"
+                    [ -n "$rank" ] && echo -e "    ${C_DIM}Rank:${C_RESET}          $rank"
+                    [ -n "$form" ] && echo -e "    ${C_DIM}Form Factor:${C_RESET}   $form"
+                    [ -n "$width" ] && echo -e "    ${C_DIM}Data Width:${C_RESET}    $width"
+                    [ -n "$voltage" ] && echo -e "    ${C_DIM}Voltage:${C_RESET}       $voltage"
+                    echo ""
+                fi
+                size="" type="" speed="" loc="" mfr="" serial="" part="" rank="" form="" voltage="" width=""
+                in_dev=1
+                ;;
+        esac
+        [ "$in_dev" = "0" ] && continue
+        # Extract fields — everything after ": "
+        case "$line" in
+            *"Size:"*)           size=$(echo "$line" | sed 's/.*Size: *//') ;;
+            *"Type:"*)           [[ "$line" != *"Type Detail:"* ]] && type=$(echo "$line" | sed 's/.*Type: *//') ;;
+            *"Configured Memory Speed:"*) speed=$(echo "$line" | sed 's/.*Configured Memory Speed: *//') ;;
+            *"Speed:"*)          [ -z "$speed" ] && speed=$(echo "$line" | sed 's/.*Speed: *//') ;;
+            *"Locator:"*)        [[ "$line" != *"Bank Locator:"* ]] && loc=$(echo "$line" | sed 's/.*Locator: *//') ;;
+            *"Manufacturer:"*)   mfr=$(echo "$line" | sed 's/.*Manufacturer: *//') ;;
+            *"Serial Number:"*)  serial=$(echo "$line" | sed 's/.*Serial Number: *//') ;;
+            *"Part Number:"*)    part=$(echo "$line" | sed 's/.*Part Number: *//' | xargs) ;;
+            *"Rank:"*)           rank=$(echo "$line" | sed 's/.*Rank: *//') ;;
+            *"Form Factor:"*)    form=$(echo "$line" | sed 's/.*Form Factor: *//') ;;
+            *"Configured Voltage:"*) voltage=$(echo "$line" | sed 's/.*Configured Voltage: *//') ;;
+            *"Data Width:"*)     width=$(echo "$line" | sed 's/.*Data Width: *//') ;;
+        esac
+    done <<< "$output"
+
+    # Print last device
+    if [ -n "$size" ] && [ "$size" != "No Module Installed" ]; then
+        echo -e "  ${C_BOLD}${loc}${C_RESET}  ${C_WHITE}${size}${C_RESET}  ${type}  ${speed}"
+        [ -n "$mfr" ] && echo -e "    ${C_DIM}Manufacturer:${C_RESET}  $mfr"
+        [ -n "$part" ] && echo -e "    ${C_DIM}Part Number:${C_RESET}   $part"
+        [ -n "$serial" ] && echo -e "    ${C_DIM}Serial:${C_RESET}        $serial"
+        [ -n "$rank" ] && echo -e "    ${C_DIM}Rank:${C_RESET}          $rank"
+        [ -n "$form" ] && echo -e "    ${C_DIM}Form Factor:${C_RESET}   $form"
+        [ -n "$width" ] && echo -e "    ${C_DIM}Data Width:${C_RESET}    $width"
+        [ -n "$voltage" ] && echo -e "    ${C_DIM}Voltage:${C_RESET}       $voltage"
+        echo ""
+    fi
+
+    # Physical Memory Array info
+    local max_cap
+    max_cap=$(echo "$output" | grep "Maximum Capacity:" | head -1 | sed 's/.*Maximum Capacity: *//')
+    local num_slots
+    num_slots=$(echo "$output" | grep "Number Of Devices:" | head -1 | sed 's/.*Number Of Devices: *//')
+    local installed
+    installed=$(echo "$output" | grep -c "Size: [0-9]" 2>/dev/null) || installed=0
+    echo -e "  ${C_DIM}Slots: ${installed}/${num_slots} populated  |  Max capacity: ${max_cap}${C_RESET}"
 
     # ECC check
-    echo ""
-    local ecc
-    ecc=$(echo "$output" | grep -c "Error Correction Type.*ECC" 2>/dev/null) || ecc=0
-    if [ "${ecc:-0}" -gt 0 ] 2>/dev/null; then
-        echo -e "  ECC: ${C_GREEN}Enabled${C_RESET}"
-        local errors
-        errors=$(echo "$output" | grep -c "Error Information Handle.*Not" 2>/dev/null) || errors=0
-        echo -e "  Errors: ${errors:-0}"
+    local ecc_type
+    ecc_type=$(echo "$output" | grep "Error Correction Type:" | head -1 | sed 's/.*Error Correction Type: *//')
+    if [[ "$ecc_type" == *"ECC"* ]]; then
+        echo -e "  ECC: ${C_GREEN}${ecc_type}${C_RESET}"
     else
-        echo -e "  ECC: ${C_DIM}Not available${C_RESET}"
+        echo -e "  ECC: ${C_DIM}${ecc_type:-None}${C_RESET}"
     fi
 }
 
