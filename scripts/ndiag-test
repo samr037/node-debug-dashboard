@@ -1,0 +1,210 @@
+#!/bin/bash
+# ndiag-test — Run all diagnostic commands and report pass/fail
+# Usage: ndiag-test [--verbose|-v]
+set -uo pipefail
+
+C_RESET="\033[0m"
+C_BOLD="\033[1m"
+C_CYAN="\033[36m"
+C_GREEN="\033[32m"
+C_RED="\033[31m"
+C_DIM="\033[2m"
+C_YELLOW="\033[33m"
+
+VERBOSE=0
+[[ "${1:-}" == "--verbose" || "${1:-}" == "-v" ]] && VERBOSE=1
+
+PASS=0
+FAIL=0
+FAILURES=()
+
+run_test() {
+    local cmd="$1"
+    local out
+    out=$(eval "$cmd" 2>&1)
+    local e=$?
+    local lines=$(echo "$out" | wc -l | xargs)
+
+    if [ $e -ne 0 ]; then
+        local err=$(echo "$out" | grep -iE "error|fail|not found|unbound|No such" | head -1 | head -c 60)
+        printf "  ${C_RED}FAIL${C_RESET}  %-42s ${C_DIM}exit:%d  %s${C_RESET}\n" "$cmd" "$e" "$err"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("$cmd (exit:$e)")
+    else
+        if [ "$VERBOSE" = "1" ]; then
+            printf "  ${C_GREEN}OK${C_RESET}    %-42s ${C_DIM}%s lines${C_RESET}\n" "$cmd" "$lines"
+        else
+            printf "  ${C_GREEN}OK${C_RESET}    %s\n" "$cmd"
+        fi
+        PASS=$((PASS + 1))
+    fi
+}
+
+section() {
+    echo ""
+    echo -e "${C_BOLD}${C_CYAN}── $1 ──${C_RESET}"
+}
+
+NODE_NAME="${KUBERNETES_NODE_NAME:-$(hostname)}"
+IS_CP=0
+[ -f "/host/system/secrets/etcd/ca.crt" ] || [ -f "/host/etc/kubernetes/pki/etcd/ca.crt" ] && IS_CP=1
+
+echo ""
+echo -e "${C_BOLD}╔══════════════════════════════════════════════════════╗${C_RESET}"
+echo -e "${C_BOLD}║          Node Debug Dashboard — Test Suite           ║${C_RESET}"
+echo -e "${C_BOLD}╚══════════════════════════════════════════════════════╝${C_RESET}"
+echo ""
+echo -e "  Node:  ${C_BOLD}${NODE_NAME}${C_RESET}"
+echo -e "  Role:  ${C_BOLD}$([ "$IS_CP" = "1" ] && echo "control-plane" || echo "worker")${C_RESET}"
+echo -e "  Date:  $(date '+%Y-%m-%d %H:%M:%S')"
+
+# ── ndiag-cpu ──
+section "ndiag-cpu"
+run_test "ndiag-cpu top"
+run_test "ndiag-cpu freq"
+run_test "ndiag-cpu load"
+run_test "ndiag-cpu throttle"
+run_test "ndiag-cpu all"
+run_test "ndiag-cpu --raw top"
+run_test "ndiag-cpu --help"
+
+# ── ndiag-mem ──
+section "ndiag-mem"
+run_test "ndiag-mem usage"
+run_test "ndiag-mem top"
+run_test "ndiag-mem dimms"
+run_test "ndiag-mem swap"
+run_test "ndiag-mem oom"
+run_test "ndiag-mem all"
+run_test "ndiag-mem --raw usage"
+run_test "ndiag-mem --help"
+
+# ── ndiag-net ──
+section "ndiag-net"
+run_test "ndiag-net ifaces"
+run_test "ndiag-net conns"
+run_test "ndiag-net listen"
+run_test "ndiag-net dns"
+run_test "ndiag-net reach"
+run_test "ndiag-net all"
+run_test "ndiag-net --raw listen"
+run_test "ndiag-net --help"
+
+# ── ndiag-disk ──
+section "ndiag-disk"
+run_test "ndiag-disk health"
+run_test "ndiag-disk io"
+run_test "ndiag-disk usage"
+run_test "ndiag-disk all"
+run_test "ndiag-disk --raw health"
+run_test "ndiag-disk --help"
+
+# ── ndiag-part ──
+section "ndiag-part"
+run_test "ndiag-part mounts"
+run_test "ndiag-part lvm"
+run_test "ndiag-part fs"
+run_test "ndiag-part table"
+run_test "ndiag-part all"
+run_test "ndiag-part --raw mounts"
+run_test "ndiag-part --help"
+
+# ── kdiag-node ──
+section "kdiag-node"
+run_test "kdiag-node status"
+run_test "kdiag-node resources"
+run_test "kdiag-node taints"
+run_test "kdiag-node pressure"
+run_test "kdiag-node kubelet"
+run_test "kdiag-node all"
+run_test "kdiag-node --raw status"
+run_test "kdiag-node --help"
+
+# ── kdiag-pods ──
+section "kdiag-pods"
+run_test "kdiag-pods list"
+run_test "kdiag-pods sick"
+run_test "kdiag-pods resources"
+run_test "kdiag-pods images"
+run_test "kdiag-pods logs"
+run_test "kdiag-pods all"
+run_test "kdiag-pods --raw list"
+run_test "kdiag-pods --help"
+
+# ── kdiag-etcd (CP only) ──
+if [ "$IS_CP" = "1" ]; then
+    section "kdiag-etcd (control plane)"
+    run_test "kdiag-etcd health"
+    run_test "kdiag-etcd members"
+    run_test "kdiag-etcd size"
+    run_test "kdiag-etcd alarms"
+    run_test "kdiag-etcd keys"
+    run_test "kdiag-etcd all"
+    run_test "kdiag-etcd --raw health"
+    run_test "kdiag-etcd --help"
+else
+    section "kdiag-etcd (skipped — worker node)"
+fi
+
+# ── kdiag-certs ──
+section "kdiag-certs"
+run_test "kdiag-certs k8s"
+run_test "kdiag-certs etcd"
+run_test "kdiag-certs sa"
+run_test "kdiag-certs tls"
+run_test "kdiag-certs all"
+run_test "kdiag-certs --raw sa"
+run_test "kdiag-certs --help"
+
+# ── kdiag-services ──
+section "kdiag-services"
+run_test "kdiag-services list"
+run_test "kdiag-services dns"
+run_test "kdiag-services endpoints"
+run_test "kdiag-services connectivity"
+run_test "kdiag-services all"
+run_test "kdiag-services --raw list"
+run_test "kdiag-services --help"
+
+# ── kdiag-events ──
+section "kdiag-events"
+run_test "kdiag-events node"
+run_test "kdiag-events warnings"
+run_test "kdiag-events all"
+run_test "kdiag-events ns kube-system"
+run_test "kdiag-events ns default"
+run_test "kdiag-events --raw node"
+run_test "kdiag-events --help"
+
+# ── Shell aliases ──
+section "Shell aliases"
+run_test "crictl ps 2>/dev/null | head -1"
+run_test "ss -tlnp | head -1"
+run_test "ip -c -br addr | head -1"
+run_test "ps aux --sort=-%mem | head -1"
+run_test "df -h | head -1"
+run_test "lsblk -dno NAME | head -1"
+run_test "cat /host-proc/loadavg"
+run_test "ls /host/var/log/pods/ | head -1"
+
+# ── Summary ──
+TOTAL=$((PASS + FAIL))
+echo ""
+echo -e "${C_BOLD}╔══════════════════════════════════════════════════════╗${C_RESET}"
+if [ "$FAIL" -eq 0 ]; then
+    echo -e "${C_BOLD}║  ${C_GREEN}ALL ${TOTAL} TESTS PASSED${C_RESET}${C_BOLD}                                 ║${C_RESET}"
+else
+    echo -e "${C_BOLD}║  ${C_RED}${FAIL} FAILED${C_RESET}${C_BOLD} / ${TOTAL} total                                ║${C_RESET}"
+fi
+echo -e "${C_BOLD}╚══════════════════════════════════════════════════════╝${C_RESET}"
+
+if [ "$FAIL" -gt 0 ]; then
+    echo ""
+    echo -e "${C_RED}Failed commands:${C_RESET}"
+    for f in "${FAILURES[@]}"; do
+        echo -e "  ${C_RED}•${C_RESET} $f"
+    done
+fi
+
+echo ""
+exit $FAIL
