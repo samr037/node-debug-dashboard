@@ -444,6 +444,8 @@ help() {
     echo -e "    ${M}aliases${R}           List all shell aliases"
     echo -e "    ${M}help-ndiag${R}        Detailed diagnostic script reference"
     echo -e "    ${M}podlog${R} <name>     Tail logs for a pod (fuzzy match)"
+    echo -e "    ${M}ndiag-test${R}        Run all diagnostic tests (143 checks)"
+    echo -e "    ${M}ndiag-test -v${R}     Verbose mode (shows line counts)"
     echo ""
     echo -e "${B}${C}═══ WEB DASHBOARD ═══${R}"
     echo ""

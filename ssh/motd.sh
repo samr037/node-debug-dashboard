@@ -102,6 +102,5 @@ echo -e "  ${C_MAGENTA}Dashboard${C_RESET}     ${C_BLUE}http://${DASH_IP:-<node-
 echo -e "  ${C_MAGENTA}API Docs${C_RESET}      ${C_BLUE}http://${DASH_IP:-<node-ip>}/docs${C_RESET}"
 echo -e "  ${C_MAGENTA}SSH Docs${C_RESET}      ${C_BLUE}https://github.com/your-org/node-debug-dashboard/blob/main/docs/ssh.md${C_RESET}"
 echo ""
-echo -e "  ${C_DIM}Type 'help-ndiag' for full diagnostics reference${C_RESET}"
-echo -e "  ${C_DIM}Type 'aliases' to list all available shortcuts${C_RESET}"
+echo -e "  ${C_DIM}Type 'help' for the full guide, 'ndiag-test' to run all tests${C_RESET}"
 echo ""
