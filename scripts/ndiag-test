@@ -176,16 +176,18 @@ run_test "kdiag-events ns default"
 run_test "kdiag-events --raw node"
 run_test "kdiag-events --help"
 
-# ── Shell aliases ──
+# ── Shell aliases (disable pipefail to avoid SIGPIPE from head) ──
 section "Shell aliases"
-run_test "crictl ps 2>/dev/null | head -1"
-run_test "ss -tlnp | head -1"
-run_test "ip -c -br addr | head -1"
-run_test "ps aux --sort=-%mem | head -1"
-run_test "df -h | head -1"
-run_test "lsblk -dno NAME | head -1"
+set +o pipefail
+run_test "crictl ps 2>/dev/null | head -3"
+run_test "ss -tlnp | head -3"
+run_test "ip -c -br addr | head -3"
+run_test "ps aux --sort=-%mem | head -3"
+run_test "df -h | head -3"
+run_test "lsblk -dno NAME | head -3"
 run_test "cat /host-proc/loadavg"
-run_test "ls /host/var/log/pods/ | head -1"
+run_test "ls /host/var/log/pods/ | head -3"
+set -o pipefail
 
 # ── Summary ──
 TOTAL=$((PASS + FAIL))
