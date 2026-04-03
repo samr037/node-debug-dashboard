@@ -1,0 +1,14 @@
+#compdef ndiag-fsck
+_ndiag_fsck() {
+    local -a subcommands
+    subcommands=(
+        'status:Filesystem state for all partitions'
+        'check:Read-only fsck (specify device)'
+        'badblocks:Read-only bad block scan (specify device)'
+        'smart-test:Start SMART self-test (specify device)'
+        'repair:Repair filesystem (MUST be unmounted!)'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+_ndiag_fsck "$@"

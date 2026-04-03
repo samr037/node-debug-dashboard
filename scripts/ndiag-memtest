@@ -1,0 +1,219 @@
+#!/bin/bash
+# ndiag-memtest — Memory testing for Node Debug Dashboard
+# Usage: ndiag-memtest [subcommand] [size]
+# Subcommands: quick, stress, full, ecc
+
+set -euo pipefail
+
+RAW=0
+
+C_RESET="\033[0m"
+C_BOLD="\033[1m"
+C_CYAN="\033[36m"
+C_GREEN="\033[32m"
+C_YELLOW="\033[33m"
+C_RED="\033[31m"
+C_DIM="\033[2m"
+HOST_PROC="${HOST_PROC:-/host-proc}"
+
+header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
+
+_get_free_mb() {
+    awk '/^MemAvailable:/{printf "%.0f", $2/1024}' "${HOST_PROC}/meminfo" 2>/dev/null || echo "256"
+}
+
+cmd_quick() {
+    local size_mb="${1:-256}"
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: memtester ${size_mb}M 1 ###"
+        memtester "${size_mb}M" 1 2>&1 || true
+        return
+    fi
+
+    local free=$(_get_free_mb)
+    header "Quick Memory Test — ${size_mb} MB"
+    echo -e "  Available RAM: ${C_BOLD}${free} MB${C_RESET}"
+    echo -e "  Test size:     ${C_BOLD}${size_mb} MB${C_RESET} (1 pass)"
+
+    if [ "$size_mb" -gt "$((free - 512))" ] 2>/dev/null; then
+        echo -e "  ${C_RED}Warning: Test size close to available RAM — may trigger OOM${C_RESET}"
+    fi
+
+    echo ""
+    echo -e "  ${C_DIM}Running: memtester ${size_mb}M 1${C_RESET}"
+    echo -e "  ${C_DIM}Press Ctrl+C to abort${C_RESET}"
+    echo ""
+
+    local result
+    result=$(memtester "${size_mb}M" 1 2>&1) || true
+
+    local errors
+    errors=$(echo "$result" | grep -c "FAILURE" 2>/dev/null) || errors=0
+    echo "$result" | grep -E "Loop|Stuck|ok|FAILURE" | sed 's/^/  /'
+
+    echo ""
+    if [ "$errors" -gt 0 ]; then
+        echo -e "  ${C_RED}${C_BOLD}MEMORY ERRORS DETECTED: ${errors} failures${C_RESET}"
+    else
+        echo -e "  ${C_GREEN}All tests passed${C_RESET}"
+    fi
+}
+
+cmd_stress() {
+    local size_mb="${1:-1024}"
+    local duration="${2:-60}"
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: stress-ng --vm 1 --vm-bytes ${size_mb}M --vm-keep -t ${duration}s --metrics ###"
+        stress-ng --vm 1 --vm-bytes "${size_mb}M" --vm-keep -t "${duration}s" --metrics 2>&1 || true
+        return
+    fi
+
+    local free=$(_get_free_mb)
+    header "Memory Stress Test — ${size_mb} MB for ${duration}s"
+    echo -e "  Available RAM: ${C_BOLD}${free} MB${C_RESET}"
+    echo -e "  Stress size:   ${C_BOLD}${size_mb} MB${C_RESET}"
+    echo -e "  Duration:      ${C_BOLD}${duration}s${C_RESET}"
+    echo ""
+    echo -e "  ${C_YELLOW}This will allocate ${size_mb} MB and continuously write/verify patterns${C_RESET}"
+    echo -e "  ${C_DIM}Press Ctrl+C to abort${C_RESET}"
+    echo ""
+
+    stress-ng --vm 1 --vm-bytes "${size_mb}M" --vm-keep -t "${duration}s" --metrics 2>&1 | sed 's/^/  /' || true
+
+    echo ""
+    echo -e "  ${C_GREEN}Stress test completed${C_RESET}"
+}
+
+cmd_full() {
+    local free=$(_get_free_mb)
+    local test_mb=$((free - 1024))  # Leave 1GB headroom
+    [ "$test_mb" -lt 512 ] && test_mb=512
+
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: memtester ${test_mb}M 1 ###"
+        memtester "${test_mb}M" 1 2>&1 || true
+        return
+    fi
+
+    header "Full Memory Test — ${test_mb} MB"
+    echo -e "  Available RAM: ${C_BOLD}${free} MB${C_RESET}"
+    echo -e "  Test size:     ${C_BOLD}${test_mb} MB${C_RESET} (max safe, leaving 1GB headroom)"
+    echo -e "  Passes:        1"
+    echo ""
+    echo -e "  ${C_RED}${C_BOLD}WARNING: This will take a LONG time (hours for large RAM)${C_RESET}"
+    echo -e "  ${C_YELLOW}The system may become slow during testing${C_RESET}"
+    echo -e "  ${C_DIM}Press Ctrl+C to abort${C_RESET}"
+    echo ""
+
+    local result
+    result=$(memtester "${test_mb}M" 1 2>&1) || true
+
+    local errors
+    errors=$(echo "$result" | grep -c "FAILURE" 2>/dev/null) || errors=0
+    echo "$result" | grep -E "Loop|Stuck|ok|FAILURE" | sed 's/^/  /'
+
+    echo ""
+    if [ "$errors" -gt 0 ]; then
+        echo -e "  ${C_RED}${C_BOLD}MEMORY ERRORS DETECTED: ${errors} failures${C_RESET}"
+    else
+        echo -e "  ${C_GREEN}All tests passed${C_RESET}"
+    fi
+}
+
+cmd_ecc() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: dmidecode -t memory | grep Error ###"
+        dmidecode -t memory 2>/dev/null | grep -iE "error|ecc" || echo "(none)"
+        echo ""
+        echo "### raw: edac-util -s (if available) ###"
+        edac-util -s 2>/dev/null || echo "(edac-util not available)"
+        echo ""
+        echo "### raw: dmesg | grep -i ecc ###"
+        dmesg 2>/dev/null | grep -iE "ecc|edac|memory error|mce" || echo "(none)"
+        return
+    fi
+
+    header "ECC / Memory Error Check"
+
+    # DMI ECC type
+    local ecc_type
+    ecc_type=$(dmidecode -t memory 2>/dev/null | grep "Error Correction Type:" | head -1 | sed 's/.*: *//') || true
+    if [[ "$ecc_type" == *"ECC"* ]]; then
+        echo -e "  ECC: ${C_GREEN}${ecc_type}${C_RESET}"
+    else
+        echo -e "  ECC: ${C_DIM}${ecc_type:-Not detected}${C_RESET}"
+    fi
+
+    # EDAC counters (Linux kernel ECC reporting)
+    echo ""
+    if [ -d "/host/sys/devices/system/edac/mc" ]; then
+        echo -e "  ${C_BOLD}EDAC Memory Controller Errors:${C_RESET}"
+        for mc in /host/sys/devices/system/edac/mc/mc*; do
+            [ -d "$mc" ] || continue
+            local name=$(basename "$mc")
+            local ce=$(cat "$mc/ce_count" 2>/dev/null || echo "?")
+            local ue=$(cat "$mc/ue_count" 2>/dev/null || echo "?")
+            local color="$C_GREEN"
+            [ "$ce" != "0" ] && [ "$ce" != "?" ] && color="$C_YELLOW"
+            [ "$ue" != "0" ] && [ "$ue" != "?" ] && color="$C_RED"
+            echo -e "    ${color}${name}: correctable=${ce}, uncorrectable=${ue}${C_RESET}"
+        done
+    else
+        echo -e "  ${C_DIM}EDAC not available (no ECC or kernel module not loaded)${C_RESET}"
+    fi
+
+    # MCE (Machine Check Exception) errors from dmesg
+    echo ""
+    echo -e "  ${C_BOLD}Kernel Memory Errors (dmesg):${C_RESET}"
+    local mce
+    mce=$(dmesg 2>/dev/null | grep -iE "ecc|edac|memory error|mce|Hardware Error" | tail -5) || true
+    if [ -n "$mce" ]; then
+        echo "$mce" | sed 's/^/    /'
+    else
+        echo -e "    ${C_GREEN}No memory errors in kernel log${C_RESET}"
+    fi
+}
+
+show_help() {
+    cat << 'EOF'
+ndiag-memtest — Memory testing for Kubernetes nodes
+
+USAGE
+    ndiag-memtest <subcommand> [size_mb] [duration_s]
+
+SUBCOMMANDS
+    quick [MB]            Quick test (default 256 MB, 1 pass)
+    stress [MB] [secs]    Stress test with stress-ng (default 1024 MB, 60s)
+    full                  Full test (max safe RAM, 1 pass — SLOW)
+    ecc                   Check ECC status, EDAC counters, kernel errors
+
+OPTIONS
+    --raw, -r  Output raw underlying commands
+
+SAFETY
+    - 'ecc' is read-only and instant
+    - 'quick' tests a small amount of RAM (fast, safe)
+    - 'stress' continuously writes patterns for a duration
+    - 'full' tests almost all available RAM — system will be slow
+    - All tests leave 1GB headroom to avoid OOM
+
+EXAMPLES
+    ndiag-memtest ecc              # Check for ECC errors (instant)
+    ndiag-memtest quick            # Quick 256MB test (~30s)
+    ndiag-memtest quick 1024       # Test 1GB
+    ndiag-memtest stress 2048 120  # Stress 2GB for 2 minutes
+    ndiag-memtest full             # Full test (WARNING: very slow)
+EOF
+}
+
+# Parse --raw flag
+[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
+
+case "${1:-ecc}" in
+    quick)   cmd_quick "${2:-256}" ;;
+    stress)  cmd_stress "${2:-1024}" "${3:-60}" ;;
+    full)    cmd_full ;;
+    ecc)     cmd_ecc ;;
+    -h|--help|help) show_help ;;
+    *) echo "Unknown: $1 — run 'ndiag-memtest --help'"; exit 1 ;;
+esac

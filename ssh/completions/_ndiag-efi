@@ -1,0 +1,15 @@
+#compdef ndiag-efi
+_ndiag_efi() {
+    local -a subcommands
+    subcommands=(
+        'list:Show all UEFI boot entries'
+        'order:Show or change boot order'
+        'next:Set boot entry for next reboot only'
+        'enable:Enable a boot entry'
+        'disable:Disable a boot entry'
+        'timeout:Show or set boot menu timeout'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+_ndiag_efi "$@"
