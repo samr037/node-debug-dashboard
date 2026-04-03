@@ -109,6 +109,23 @@ run_test "ndiag-part all"
 run_test "ndiag-part --raw mounts"
 run_test "ndiag-part --help"
 
+# ── ndiag-fsck (read-only only) ──
+section "ndiag-fsck"
+run_test "ndiag-fsck status"
+run_test "ndiag-fsck --help"
+
+# ── ndiag-memtest (read-only only) ──
+section "ndiag-memtest"
+run_test "ndiag-memtest ecc"
+run_test "ndiag-memtest --help"
+
+# ── ndiag-efi ──
+section "ndiag-efi"
+run_test "ndiag-efi list"
+run_test "ndiag-efi order"
+run_test "ndiag-efi timeout"
+run_test "ndiag-efi --help"
+
 # ── kdiag-node ──
 section "kdiag-node"
 run_test "kdiag-node status"
