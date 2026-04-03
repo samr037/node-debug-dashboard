@@ -31,7 +31,11 @@ cmd_status() {
     header "Filesystem Status"
     echo -e "  ${C_DIM}DEVICE          FSTYPE   MOUNT                    STATE${C_RESET}"
 
-    lsblk -rno NAME,FSTYPE,MOUNTPOINT,SIZE 2>/dev/null | while read -r name fstype mount size; do
+    lsblk -Pno NAME,FSTYPE,MOUNTPOINT 2>/dev/null | while read -r line; do
+        # Parse KEY="VALUE" format
+        local name=$(echo "$line" | grep -oP 'NAME="\K[^"]+')
+        local fstype=$(echo "$line" | grep -oP 'FSTYPE="\K[^"]+')
+        local mount=$(echo "$line" | grep -oP 'MOUNTPOINT="\K[^"]+')
         [ -z "$fstype" ] && continue
         [[ "$fstype" == "swap" || "$fstype" == "squashfs" || "$fstype" == "vfat" ]] && continue
 
