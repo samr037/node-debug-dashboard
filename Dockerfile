@@ -95,6 +95,9 @@ RUN mkdir -p /run/sshd && \
     ln -sf /opt/node-dashboard/scripts/kdiag-services /usr/local/bin/kdiag-services && \
     ln -sf /opt/node-dashboard/scripts/kdiag-events /usr/local/bin/kdiag-events && \
     ln -sf /opt/node-dashboard/scripts/ndiag-test /usr/local/bin/ndiag-test && \
+    ln -sf /opt/node-dashboard/scripts/ndiag-fsck /usr/local/bin/ndiag-fsck && \
+    ln -sf /opt/node-dashboard/scripts/ndiag-memtest /usr/local/bin/ndiag-memtest && \
+    ln -sf /opt/node-dashboard/scripts/ndiag-efi /usr/local/bin/ndiag-efi && \
     # Allow tshark to be run without root (for debug user)
     setcap cap_net_raw,cap_net_admin+eip /usr/bin/dumpcap 2>/dev/null || true
 

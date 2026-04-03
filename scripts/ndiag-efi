@@ -1,0 +1,235 @@
+#!/bin/bash
+# ndiag-efi — UEFI boot management for Node Debug Dashboard
+# Usage: ndiag-efi [subcommand] [args]
+# Subcommands: list, order, next, enable, disable, timeout
+
+set -euo pipefail
+
+RAW=0
+
+C_RESET="\033[0m"
+C_BOLD="\033[1m"
+C_CYAN="\033[36m"
+C_GREEN="\033[32m"
+C_YELLOW="\033[33m"
+C_RED="\033[31m"
+C_DIM="\033[2m"
+
+header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
+
+_efi_available() {
+    if [ ! -d "/sys/firmware/efi" ] && [ ! -d "/host/sys/firmware/efi" ]; then
+        echo -e "  ${C_RED}UEFI not available (system booted in BIOS/CSM mode or EFI not exposed)${C_RESET}"
+        return 1
+    fi
+    return 0
+}
+
+cmd_list() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: efibootmgr -v ###"
+        efibootmgr -v 2>&1 || echo "(efibootmgr not available)"
+        return
+    fi
+
+    _efi_available || return
+
+    header "UEFI Boot Entries"
+
+    local output
+    output=$(efibootmgr -v 2>/dev/null) || { echo -e "  ${C_RED}efibootmgr failed${C_RESET}"; return; }
+
+    # Boot order
+    local order
+    order=$(echo "$output" | grep "^BootOrder:" | sed 's/BootOrder: *//')
+    echo -e "  Boot Order: ${C_BOLD}${order}${C_RESET}"
+
+    # Current boot
+    local current
+    current=$(echo "$output" | grep "^BootCurrent:" | sed 's/BootCurrent: *//')
+    echo -e "  Current:    ${C_BOLD}Boot${current}${C_RESET}"
+
+    # Timeout
+    local timeout
+    timeout=$(echo "$output" | grep "^Timeout:" | sed 's/Timeout: *//')
+    echo -e "  Timeout:    ${timeout}"
+    echo ""
+
+    # Entries
+    echo -e "  ${C_DIM}ID      STATUS    LABEL                              DEVICE${C_RESET}"
+    echo "$output" | grep "^Boot[0-9A-Fa-f]" | while read -r line; do
+        local id=$(echo "$line" | grep -oP '^Boot\K[0-9A-Fa-f]{4}')
+        local active=""
+        if echo "$line" | grep -q '^\*\|^Boot[0-9A-Fa-f]*\*'; then
+            active="active"
+        fi
+        # Parse active status more carefully
+        if echo "$line" | grep -qP "^Boot${id}\*"; then
+            active="active"
+        fi
+
+        local label=$(echo "$line" | sed "s/^Boot${id}[* ]*//" | cut -d$'\t' -f1 | head -c 35)
+        local device=$(echo "$line" | grep -oP '(?:HD|PciRoot|File|BBS|FvVol).*' | head -c 40) || true
+
+        local color="$C_RESET"
+        local status_icon="  "
+        if [ "$id" = "$current" ]; then
+            color="$C_GREEN"
+            status_icon="${C_GREEN}▶${C_RESET} "
+        fi
+        if [ -z "$active" ] && [ "$id" != "$current" ]; then
+            # Check if inactive
+            if ! echo ",$order," | grep -q ",$id,"; then
+                color="$C_DIM"
+                status_icon="${C_DIM}○${C_RESET} "
+            fi
+        fi
+
+        printf "  ${status_icon}${color}%-7s %-9s %-35s %s${C_RESET}\n" \
+            "Boot${id}" "${active:-     }" "$label" "$device"
+    done
+}
+
+cmd_order() {
+    local new_order="${1:-}"
+    if [ -z "$new_order" ]; then
+        # Show current order with labels
+        _efi_available || return
+
+        header "Current Boot Order"
+        local output
+        output=$(efibootmgr 2>/dev/null) || return
+
+        local order
+        order=$(echo "$output" | grep "^BootOrder:" | sed 's/BootOrder: *//')
+        echo -e "  ${C_BOLD}${order}${C_RESET}"
+        echo ""
+        echo -e "  ${C_DIM}Entries in order:${C_RESET}"
+        IFS=',' read -ra entries <<< "$order"
+        local idx=1
+        for entry in "${entries[@]}"; do
+            local label
+            label=$(echo "$output" | grep "^Boot${entry}" | sed "s/^Boot${entry}[* ]*//" | head -c 40)
+            printf "    %d. Boot%-4s  %s\n" "$idx" "$entry" "$label"
+            idx=$((idx + 1))
+        done
+        echo ""
+        echo -e "  ${C_DIM}To reorder: ndiag-efi order 0003,0001,0000,...${C_RESET}"
+        echo -e "  ${C_DIM}Use boot IDs (4-digit hex) separated by commas${C_RESET}"
+        return
+    fi
+
+    header "Setting Boot Order"
+    echo -e "  ${C_YELLOW}Changing boot order to: ${new_order}${C_RESET}"
+    echo ""
+    efibootmgr -o "$new_order" 2>&1 | sed 's/^/  /'
+    echo ""
+    echo -e "  ${C_GREEN}Boot order updated${C_RESET}"
+}
+
+cmd_next() {
+    local boot_id="${1:-}"
+    if [ -z "$boot_id" ]; then
+        echo -e "${C_RED}Usage: ndiag-efi next <boot-id>${C_RESET}"
+        echo "  Sets the boot entry for the NEXT reboot only."
+        echo "  Example: ndiag-efi next 0003"
+        echo ""
+        echo -e "  ${C_DIM}Run 'ndiag-efi list' to see available entries${C_RESET}"
+        return
+    fi
+
+    header "Setting Next Boot"
+    echo -e "  ${C_YELLOW}Next boot will use: Boot${boot_id}${C_RESET}"
+    echo ""
+    efibootmgr -n "$boot_id" 2>&1 | sed 's/^/  /'
+    echo ""
+    echo -e "  ${C_GREEN}BootNext set — will reset after one boot${C_RESET}"
+}
+
+cmd_enable() {
+    local boot_id="${1:-}"
+    if [ -z "$boot_id" ]; then
+        echo -e "${C_RED}Usage: ndiag-efi enable <boot-id>${C_RESET}"
+        echo "  Example: ndiag-efi enable 0003"
+        return
+    fi
+    header "Enabling Boot Entry"
+    efibootmgr -a -b "$boot_id" 2>&1 | sed 's/^/  /'
+    echo -e "  ${C_GREEN}Boot${boot_id} enabled${C_RESET}"
+}
+
+cmd_disable() {
+    local boot_id="${1:-}"
+    if [ -z "$boot_id" ]; then
+        echo -e "${C_RED}Usage: ndiag-efi disable <boot-id>${C_RESET}"
+        echo "  Example: ndiag-efi disable 0003"
+        return
+    fi
+    header "Disabling Boot Entry"
+    echo -e "  ${C_YELLOW}Warning: Disabling a boot entry may prevent the system from booting${C_RESET}"
+    efibootmgr -A -b "$boot_id" 2>&1 | sed 's/^/  /'
+    echo -e "  ${C_YELLOW}Boot${boot_id} disabled${C_RESET}"
+}
+
+cmd_timeout() {
+    local secs="${1:-}"
+    if [ -z "$secs" ]; then
+        local current
+        current=$(efibootmgr 2>/dev/null | grep "^Timeout:" | sed 's/Timeout: *//')
+        echo -e "  Current timeout: ${C_BOLD}${current}${C_RESET}"
+        echo ""
+        echo -e "  ${C_DIM}To change: ndiag-efi timeout <seconds>${C_RESET}"
+        return
+    fi
+    header "Setting Boot Timeout"
+    efibootmgr -t "$secs" 2>&1 | sed 's/^/  /'
+    echo -e "  ${C_GREEN}Timeout set to ${secs} seconds${C_RESET}"
+}
+
+show_help() {
+    cat << 'EOF'
+ndiag-efi — UEFI boot management for Kubernetes nodes
+
+USAGE
+    ndiag-efi <subcommand> [args]
+
+SUBCOMMANDS
+    list                 Show all boot entries with status and device path
+    order [new-order]    Show or change boot order (comma-separated IDs)
+    next <boot-id>       Set boot entry for NEXT reboot only
+    enable <boot-id>     Enable a boot entry
+    disable <boot-id>    Disable a boot entry
+    timeout [seconds]    Show or set boot menu timeout
+
+OPTIONS
+    --raw, -r  Output raw efibootmgr -v
+
+SAFETY
+    - 'list' and 'order' (no args) are read-only
+    - 'next' only affects the next single boot
+    - 'order', 'enable', 'disable' modify NVRAM — be careful
+    - Wrong boot order can make the system unbootable
+
+EXAMPLES
+    ndiag-efi list                      # See all boot entries
+    ndiag-efi order                     # See current boot order with labels
+    ndiag-efi order 0003,0001,0000      # Reorder: Talos first
+    ndiag-efi next 0003                 # Boot Talos next time only
+    ndiag-efi enable 0005               # Re-enable a disabled entry
+    ndiag-efi timeout 5                 # Set 5s boot menu timeout
+EOF
+}
+
+# Parse --raw flag
+[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
+
+case "${1:-list}" in
+    list)    cmd_list ;;
+    order)   cmd_order "${2:-}" ;;
+    next)    cmd_next "${2:-}" ;;
+    enable)  cmd_enable "${2:-}" ;;
+    disable) cmd_disable "${2:-}" ;;
+    timeout) cmd_timeout "${2:-}" ;;
+    -h|--help|help) show_help ;;
+    *) echo "Unknown: $1 — run 'ndiag-efi --help'"; exit 1 ;;
+esac

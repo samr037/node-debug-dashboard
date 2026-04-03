@@ -1,0 +1,13 @@
+#compdef ndiag-memtest
+_ndiag_memtest() {
+    local -a subcommands
+    subcommands=(
+        'quick:Quick memtester (default 256MB, 1 pass)'
+        'stress:Stress test with stress-ng (specify MB and seconds)'
+        'full:Full memory test (max safe RAM — SLOW)'
+        'ecc:Check ECC status and kernel memory errors'
+        'help:Show usage documentation'
+    )
+    _describe 'subcommand' subcommands
+}
+_ndiag_memtest "$@"

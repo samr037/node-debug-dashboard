@@ -1,0 +1,287 @@
+#!/bin/bash
+# ndiag-fsck — Filesystem check & disk surface tests
+# Usage: ndiag-fsck [subcommand] [device]
+# Subcommands: status, check, badblocks, smart-test, repair
+
+set -euo pipefail
+
+RAW=0
+
+C_RESET="\033[0m"
+C_BOLD="\033[1m"
+C_CYAN="\033[36m"
+C_GREEN="\033[32m"
+C_YELLOW="\033[33m"
+C_RED="\033[31m"
+C_DIM="\033[2m"
+
+header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
+
+cmd_status() {
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: tune2fs -l for each partition ###"
+        lsblk -rno NAME,FSTYPE,MOUNTPOINT 2>/dev/null | while read -r name fstype mount; do
+            [ -z "$fstype" ] && continue
+            echo "--- /dev/$name ($fstype) ---"
+            tune2fs -l "/dev/$name" 2>/dev/null | grep -iE "state|mount count|check|error" || echo "(not ext)"
+            echo ""
+        done
+        return
+    fi
+    header "Filesystem Status"
+    echo -e "  ${C_DIM}DEVICE          FSTYPE   MOUNT                    STATE${C_RESET}"
+
+    lsblk -rno NAME,FSTYPE,MOUNTPOINT,SIZE 2>/dev/null | while read -r name fstype mount size; do
+        [ -z "$fstype" ] && continue
+        [[ "$fstype" == "swap" || "$fstype" == "squashfs" || "$fstype" == "vfat" ]] && continue
+
+        local dev="/dev/$name"
+        local state=""
+        local color="$C_DIM"
+
+        case "$fstype" in
+            ext2|ext3|ext4)
+                state=$(tune2fs -l "$dev" 2>/dev/null | grep "Filesystem state:" | sed 's/.*: *//' | xargs) || true
+                local mount_count=$(tune2fs -l "$dev" 2>/dev/null | grep "Mount count:" | sed 's/.*: *//' | xargs) || true
+                local max_mount=$(tune2fs -l "$dev" 2>/dev/null | grep "Maximum mount count:" | sed 's/.*: *//' | xargs) || true
+                local last_check=$(tune2fs -l "$dev" 2>/dev/null | grep "Last checked:" | sed 's/.*: *//' | xargs) || true
+                [ "$state" = "clean" ] && color="$C_GREEN"
+                [[ "$state" == *"error"* ]] && color="$C_RED"
+                state="${state} (mounts: ${mount_count:-?}/${max_mount:-?}, last: ${last_check:-?})"
+                ;;
+            xfs)
+                state="(use xfs_repair -n to check)"
+                ;;
+            btrfs)
+                state="(use btrfs check --readonly)"
+                ;;
+            *)
+                state="($fstype)"
+                ;;
+        esac
+
+        printf "  ${color}%-15s %-8s %-24s %s${C_RESET}\n" "$name" "$fstype" "${mount:--}" "$state"
+    done
+}
+
+cmd_check() {
+    local dev="${1:-}"
+    if [ -z "$dev" ]; then
+        echo -e "${C_RED}Usage: ndiag-fsck check /dev/<device>${C_RESET}"
+        echo "  Example: ndiag-fsck check /dev/sda4"
+        echo ""
+        echo "  Available partitions:"
+        lsblk -rno NAME,FSTYPE,MOUNTPOINT,SIZE 2>/dev/null | awk '$2!="" && $2!="swap" && $2!="squashfs" {printf "    /dev/%-12s %-8s %-20s %s\n", $1, $2, $3, $4}'
+        return
+    fi
+
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: fsck -n $dev ###"
+        fsck -n "$dev" 2>&1 || true
+        return
+    fi
+
+    local fstype=$(lsblk -no FSTYPE "$dev" 2>/dev/null | head -1 | xargs) || true
+    local mount=$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | head -1 | xargs) || true
+
+    header "Read-Only Filesystem Check — ${dev}"
+    echo -e "  Type:    ${fstype:-unknown}"
+    echo -e "  Mount:   ${mount:-(not mounted)}"
+    echo ""
+
+    if [ -n "$mount" ]; then
+        echo -e "  ${C_YELLOW}Warning: Filesystem is mounted at ${mount}${C_RESET}"
+        echo -e "  ${C_DIM}Read-only check only — results may be inaccurate on mounted fs${C_RESET}"
+        echo ""
+    fi
+
+    case "$fstype" in
+        ext2|ext3|ext4)
+            echo -e "  ${C_DIM}Running: e2fsck -n -f ${dev}${C_RESET}"
+            echo ""
+            e2fsck -n -f "$dev" 2>&1 | sed 's/^/  /' || true
+            ;;
+        xfs)
+            echo -e "  ${C_DIM}Running: xfs_repair -n ${dev}${C_RESET}"
+            echo ""
+            xfs_repair -n "$dev" 2>&1 | tail -10 | sed 's/^/  /' || true
+            ;;
+        btrfs)
+            echo -e "  ${C_DIM}Running: btrfs check --readonly ${dev}${C_RESET}"
+            echo ""
+            btrfs check --readonly "$dev" 2>&1 | sed 's/^/  /' || true
+            ;;
+        vfat)
+            echo -e "  ${C_DIM}Running: fsck.vfat -n ${dev}${C_RESET}"
+            echo ""
+            fsck.vfat -n "$dev" 2>&1 | sed 's/^/  /' || true
+            ;;
+        *)
+            echo -e "  ${C_DIM}No fsck available for ${fstype:-unknown}${C_RESET}"
+            ;;
+    esac
+}
+
+cmd_badblocks() {
+    local dev="${1:-}"
+    if [ -z "$dev" ]; then
+        echo -e "${C_RED}Usage: ndiag-fsck badblocks /dev/<device>${C_RESET}"
+        echo "  Runs a READ-ONLY bad block scan (non-destructive)"
+        echo ""
+        echo "  Available disks:"
+        lsblk -dno NAME,SIZE,MODEL 2>/dev/null | awk '{printf "    /dev/%-10s %6s  %s\n", $1, $2, $3}'
+        return
+    fi
+
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: badblocks -sv $dev ###"
+        badblocks -sv "$dev" 2>&1 || true
+        return
+    fi
+
+    header "Bad Block Scan (read-only) — ${dev}"
+    echo -e "  ${C_YELLOW}This is a READ-ONLY scan — safe on mounted/live disks${C_RESET}"
+    echo -e "  ${C_DIM}For write test: badblocks -wsv (DESTROYS DATA — use on unmounted only)${C_RESET}"
+    echo ""
+    echo -e "  ${C_DIM}Running: badblocks -sv ${dev}${C_RESET}"
+    echo -e "  ${C_DIM}Press Ctrl+C to abort${C_RESET}"
+    echo ""
+    badblocks -sv "$dev" 2>&1 | sed 's/^/  /' || true
+}
+
+cmd_smart_test() {
+    local dev="${1:-}"
+    local test_type="${2:-short}"
+    if [ -z "$dev" ]; then
+        echo -e "${C_RED}Usage: ndiag-fsck smart-test /dev/<device> [short|long|conveyance]${C_RESET}"
+        echo ""
+        echo "  short       ~2 min  Quick self-test (default)"
+        echo "  long        ~hours  Full surface scan"
+        echo "  conveyance  ~5 min  Transport damage test"
+        echo ""
+        echo "  Available disks:"
+        lsblk -dno NAME,SIZE,MODEL 2>/dev/null | awk 'NF>=2{printf "    /dev/%-10s %6s  %s\n", $1, $2, $3}'
+        return
+    fi
+
+    if [ "$RAW" = "1" ]; then
+        echo "### raw: smartctl -t $test_type $dev ###"
+        smartctl -t "$test_type" "$dev" 2>&1 || smartctl -t "$test_type" -d sat "$dev" 2>&1 || true
+        echo ""
+        echo "### raw: smartctl -l selftest $dev ###"
+        smartctl -l selftest "$dev" 2>&1 || smartctl -l selftest -d sat "$dev" 2>&1 || true
+        return
+    fi
+
+    header "SMART Self-Test — ${dev} (${test_type})"
+
+    # Start the test
+    echo -e "  ${C_DIM}Starting ${test_type} self-test...${C_RESET}"
+    local result
+    result=$(smartctl -t "$test_type" "$dev" 2>/dev/null) || result=$(smartctl -t "$test_type" -d sat "$dev" 2>/dev/null) || true
+
+    local eta
+    eta=$(echo "$result" | grep -i "complete after" | sed 's/.*after *//' | xargs) || true
+    echo -e "  ${C_GREEN}Test started${C_RESET}"
+    [ -n "$eta" ] && echo -e "  ETA: ${eta}"
+    echo ""
+
+    # Show previous results
+    echo -e "  ${C_BOLD}Previous Self-Test Results:${C_RESET}"
+    local log
+    log=$(smartctl -l selftest "$dev" 2>/dev/null) || log=$(smartctl -l selftest -d sat "$dev" 2>/dev/null) || true
+    echo "$log" | grep -A20 "SMART Self-test log" | sed 's/^/  /' || echo "  (no previous tests)"
+    echo ""
+    echo -e "  ${C_DIM}Check results later: smartctl -l selftest ${dev}${C_RESET}"
+}
+
+cmd_repair() {
+    local dev="${1:-}"
+    if [ -z "$dev" ]; then
+        echo -e "${C_RED}Usage: ndiag-fsck repair /dev/<device>${C_RESET}"
+        echo ""
+        echo -e "  ${C_RED}${C_BOLD}WARNING: This will attempt to REPAIR the filesystem.${C_RESET}"
+        echo -e "  ${C_RED}The device MUST be unmounted first.${C_RESET}"
+        echo ""
+        echo "  Available partitions:"
+        lsblk -rno NAME,FSTYPE,MOUNTPOINT,SIZE 2>/dev/null | awk '$2!="" && $2!="swap" && $2!="squashfs" {printf "    /dev/%-12s %-8s %-20s %s\n", $1, $2, $3, $4}'
+        return
+    fi
+
+    local mount=$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | head -1 | xargs) || true
+    if [ -n "$mount" ]; then
+        echo -e "  ${C_RED}ERROR: ${dev} is mounted at ${mount}${C_RESET}"
+        echo -e "  ${C_RED}Unmount the filesystem first before attempting repair.${C_RESET}"
+        echo -e "  ${C_DIM}Use 'ndiag-fsck check ${dev}' for a read-only check instead.${C_RESET}"
+        return 1
+    fi
+
+    local fstype=$(lsblk -no FSTYPE "$dev" 2>/dev/null | head -1 | xargs) || true
+    header "Filesystem Repair — ${dev} (${fstype})"
+    echo -e "  ${C_RED}${C_BOLD}REPAIRING FILESYSTEM — THIS MAY MODIFY DATA${C_RESET}"
+    echo ""
+
+    case "$fstype" in
+        ext2|ext3|ext4)
+            echo -e "  ${C_DIM}Running: e2fsck -y -f ${dev}${C_RESET}"
+            e2fsck -y -f "$dev" 2>&1 | sed 's/^/  /' || true
+            ;;
+        xfs)
+            echo -e "  ${C_DIM}Running: xfs_repair ${dev}${C_RESET}"
+            xfs_repair "$dev" 2>&1 | tail -20 | sed 's/^/  /' || true
+            ;;
+        btrfs)
+            echo -e "  ${C_DIM}Running: btrfs check --repair ${dev}${C_RESET}"
+            btrfs check --repair "$dev" 2>&1 | sed 's/^/  /' || true
+            ;;
+        *)
+            echo -e "  ${C_DIM}No repair tool for ${fstype:-unknown}${C_RESET}"
+            ;;
+    esac
+}
+
+show_help() {
+    cat << 'EOF'
+ndiag-fsck — Filesystem check & disk surface tests
+
+USAGE
+    ndiag-fsck <subcommand> [device] [options]
+
+SUBCOMMANDS
+    status                    Filesystem state for all partitions
+    check <dev>               Read-only fsck (safe on mounted fs)
+    badblocks <dev>           Read-only bad block scan (safe)
+    smart-test <dev> [type]   Start SMART self-test (short/long/conveyance)
+    repair <dev>              Repair filesystem (MUST be unmounted!)
+
+OPTIONS
+    --raw, -r  Output raw underlying commands
+
+SAFETY
+    - 'status', 'check', 'badblocks' are READ-ONLY and safe
+    - 'smart-test' triggers a drive self-test (non-destructive)
+    - 'repair' MODIFIES the filesystem — device must be unmounted
+    - For destructive badblocks write test: badblocks -wsv /dev/xxx
+
+EXAMPLES
+    ndiag-fsck status                    # Overview of all filesystems
+    ndiag-fsck check /dev/sda4           # Read-only check
+    ndiag-fsck badblocks /dev/sdb        # Surface scan (read-only)
+    ndiag-fsck smart-test /dev/sda short # Start 2-min SMART test
+    ndiag-fsck smart-test /dev/sda long  # Start full surface scan
+    ndiag-fsck repair /dev/sdb1          # Repair (unmounted only!)
+EOF
+}
+
+# Parse --raw flag
+[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
+
+case "${1:-status}" in
+    status)     cmd_status ;;
+    check)      cmd_check "${2:-}" ;;
+    badblocks)  cmd_badblocks "${2:-}" ;;
+    smart-test) cmd_smart_test "${2:-}" "${3:-short}" ;;
+    repair)     cmd_repair "${2:-}" ;;
+    -h|--help|help) show_help ;;
+    *) echo "Unknown: $1 — run 'ndiag-fsck --help'"; exit 1 ;;
+esac
