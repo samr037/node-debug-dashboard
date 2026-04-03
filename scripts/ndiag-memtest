@@ -166,7 +166,7 @@ cmd_ecc() {
     echo ""
     echo -e "  ${C_BOLD}Kernel Memory Errors (dmesg):${C_RESET}"
     local mce
-    mce=$(dmesg 2>/dev/null | grep -iE "ecc|edac|memory error|mce|Hardware Error" | tail -5) || true
+    mce=$(dmesg 2>/dev/null | grep -iE "\becc\b|\bedac\b|memory.error|machine.check|Hardware Error|mce:" | tail -5) || true
     if [ -n "$mce" ]; then
         echo "$mce" | sed 's/^/    /'
     else

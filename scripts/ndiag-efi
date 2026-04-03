@@ -57,7 +57,7 @@ cmd_list() {
 
     # Entries
     echo -e "  ${C_DIM}ID      STATUS    LABEL                              DEVICE${C_RESET}"
-    echo "$output" | grep "^Boot[0-9A-Fa-f]" | while read -r line; do
+    echo "$output" | grep -E "^Boot[0-9A-Fa-f]{4}" | while read -r line; do
         local id=$(echo "$line" | grep -oP '^Boot\K[0-9A-Fa-f]{4}')
         local active=""
         if echo "$line" | grep -q '^\*\|^Boot[0-9A-Fa-f]*\*'; then
