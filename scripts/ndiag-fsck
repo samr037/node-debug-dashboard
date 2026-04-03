@@ -31,11 +31,12 @@ cmd_status() {
     header "Filesystem Status"
     echo -e "  ${C_DIM}DEVICE          FSTYPE   MOUNT                    STATE${C_RESET}"
 
-    lsblk -Pno NAME,FSTYPE,MOUNTPOINT 2>/dev/null | while read -r line; do
-        # Parse KEY="VALUE" format
-        local name=$(echo "$line" | grep -oP 'NAME="\K[^"]+')
-        local fstype=$(echo "$line" | grep -oP 'FSTYPE="\K[^"]+')
-        local mount=$(echo "$line" | grep -oP 'MOUNTPOINT="\K[^"]+')
+    # Use blkid for fstype (lsblk doesn't show it on Talos)
+    blkid 2>/dev/null | while read -r line; do
+        local dev=$(echo "$line" | cut -d: -f1)
+        local name=$(basename "$dev")
+        local fstype=$(echo "$line" | grep -oP 'TYPE="\K[^"]+') || true
+        local mount=$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | head -1 | xargs) || true
         [ -z "$fstype" ] && continue
         [[ "$fstype" == "swap" || "$fstype" == "squashfs" || "$fstype" == "vfat" ]] && continue
 
