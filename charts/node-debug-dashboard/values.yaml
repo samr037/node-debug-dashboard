@@ -10,11 +10,11 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# HTTP dashboard / REST API port (host port, since hostNetwork is required).
+# Host port for the dashboard / REST API (uses hostNetwork).
 httpPort: 80
 
-# SSH debug shell — disabled by default (secure-by-default).
-# To enable: set ssh.enabled=true and provide ssh.authorizedKeys.
+# SSH debug shell. Off by default. To enable, set ssh.enabled=true and
+# pass keys via ssh.authorizedKeys.
 ssh:
   enabled: false
   port: 2022
@@ -24,18 +24,17 @@ ssh:
   #   ssh-rsa AAAA... other@host
   authorizedKeys: ""
 
-# Privileged host access — required for hardware/Kubernetes/etcd diagnostics.
-# Do not change unless you know what you are doing.
+# Required for hardware, Kubernetes, and etcd diagnostics.
 hostNetwork: true
 hostPID: true
 hostIPC: true
 privileged: true
 
-# Mount the host root at /host (required for SMART, sensors, EFI, Talos diagnostics).
+# Mount host / at /host. Required for SMART, sensors, EFI, Talos bits.
 hostRootMount: true
 
-# RBAC: ServiceAccount + ClusterRole/Binding with read access on
-# nodes, pods, services, endpoints, events — used by Kubernetes / kdiag-* features.
+# Read-only access on nodes, pods, services, endpoints, events.
+# Used by the Kubernetes section and kdiag-* scripts.
 serviceAccount:
   create: true
   name: ""
@@ -44,7 +43,7 @@ serviceAccount:
 rbac:
   create: true
 
-# Run on every node by default. Override to scope to specific nodes.
+# Run on every node by default.
 tolerations:
   - operator: Exists
 
@@ -52,7 +51,6 @@ nodeSelector: {}
 affinity: {}
 
 resources:
-  # Defaults are conservative — adjust based on cluster size.
   requests:
     cpu: 50m
     memory: 64Mi

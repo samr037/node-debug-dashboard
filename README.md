@@ -10,11 +10,11 @@
 
 ## Why this exists
 
-[Talos Linux](https://www.talos.dev) is API-driven, immutable, and shell-less by design — there's no SSH on the host, no package manager, no ad-hoc tooling. That's exactly what makes it one of the most secure ways to run Kubernetes, but it also makes node-level debugging harder than on a traditional Linux distro: when a disk degrades, a NIC misbehaves, ECC errors creep in, or etcd starts flapping, you can't just `ssh` in and poke around.
+[Talos Linux](https://www.talos.dev) has no shell, no package manager, and no SSH on the host. That makes it harder to look at things when a disk degrades, a NIC misbehaves, ECC errors show up, or etcd starts flapping.
 
-This dashboard fills that gap **without compromising Talos's posture**. It runs as a privileged DaemonSet on each node, surfaces hardware / storage / network / Kubernetes / etcd diagnostics over a web UI and REST API, and provides an opt-in SSH debug shell with curated `ndiag-*` and `kdiag-*` scripts. Pure observability — the host stays immutable.
+This dashboard runs as a privileged DaemonSet, exposes hardware, storage, network, Kubernetes, and etcd state over an HTTP UI and REST API, and ships an opt-in SSH shell with `ndiag-*` and `kdiag-*` diagnostic scripts. The host is never modified.
 
-It also works on any Kubernetes distribution, but the `kdiag-*` and Talos-aware sections (machine type, schematic, etcd via `/system/secrets/etcd/`, Talos extensions, EFI boot order) are where it shines.
+It works on any Kubernetes distribution. Talos-specific bits: machine type, schematic, extensions, etcd certificates at `/system/secrets/etcd/`, EFI boot entries.
 
 ## Features
 
@@ -308,12 +308,12 @@ docker run --privileged --net=host --pid=host \
 
 ### Security
 
-The container ships with default passwords (`debug:debug`, `root:root`) and passwordless `sudo` for the `debug` user, intentionally — this is a **debugging tool meant to run inside a private cluster**, not on the public internet. Before deploying:
+The image contains hardcoded passwords (`debug:debug`, `root:root`) and passwordless `sudo` for the `debug` user. SSH is off by default; if you turn it on, use key-based auth.
 
-- Set `SSH_PASSWORD_AUTH=false` and provide `SSH_AUTHORIZED_KEYS` (the recommended DaemonSet above already does this).
-- Do not expose port `2022` outside the cluster network. If you must, put it behind a bastion / VPN.
-- If you need password auth, override the defaults at runtime (e.g. via your own entrypoint or by baking a derived image with new `chpasswd` calls).
-- The pod runs `privileged: true` with the host root mounted at `/host` — treat SSH access as equivalent to root on the node.
+- Keep `SSH_PASSWORD_AUTH=false` and pass keys via `SSH_AUTHORIZED_KEYS`.
+- Don't expose port 2022 outside the cluster network.
+- To use password auth, change the `chpasswd` calls in a derived image rather than the defaults shipped here.
+- The pod runs `privileged: true` with `/` mounted at `/host`. SSH access is equivalent to root on the node.
 
 ### Caching Tiers
 
