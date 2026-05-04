@@ -1,0 +1,27 @@
+apiVersion: v2
+name: node-debug-dashboard
+description: Hardware monitoring, Kubernetes diagnostics, and SSH debug shell for Talos Linux (and any K8s) nodes
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.24.0-0"
+home: https://github.com/samr037/node-debug-dashboard
+sources:
+  - https://github.com/samr037/node-debug-dashboard
+keywords:
+  - talos
+  - talos-linux
+  - kubernetes
+  - debugging
+  - diagnostics
+  - hardware
+  - smart
+  - etcd
+  - daemonset
+maintainers:
+  - name: samr037
+    url: https://github.com/samr037
+icon: https://raw.githubusercontent.com/siderolabs/talos/main/website/static/img/logo.svg
+annotations:
+  artifacthub.io/category: monitoring-logging
+  artifacthub.io/license: MIT
