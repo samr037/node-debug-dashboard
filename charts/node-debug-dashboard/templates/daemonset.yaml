@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "node-debug-dashboard.fullname" . }}
+  labels:
+    {{- include "node-debug-dashboard.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "node-debug-dashboard.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "node-debug-dashboard.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "node-debug-dashboard.serviceAccountName" . }}
+      hostNetwork: {{ .Values.hostNetwork }}
+      hostPID: {{ .Values.hostPID }}
+      hostIPC: {{ .Values.hostIPC }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: dashboard
+          image: {{ include "node-debug-dashboard.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            privileged: {{ .Values.privileged }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.httpPort }}
+              protocol: TCP
+            {{- if .Values.ssh.enabled }}
+            - name: ssh
+              containerPort: {{ .Values.ssh.port }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: KUBERNETES_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: SSH_ENABLED
+              value: {{ .Values.ssh.enabled | quote }}
+            - name: SSH_PORT
+              value: {{ .Values.ssh.port | quote }}
+            - name: SSH_PASSWORD_AUTH
+              value: {{ .Values.ssh.passwordAuth | quote }}
+            {{- with .Values.ssh.authorizedKeys }}
+            - name: SSH_AUTHORIZED_KEYS
+              value: |
+                {{- . | nindent 16 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.hostRootMount }}
+            - name: host-root
+              mountPath: /host
+            {{- end }}
+            - name: host-proc
+              mountPath: /host-proc
+              readOnly: true
+      volumes:
+        {{- if .Values.hostRootMount }}
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+        {{- end }}
+        - name: host-proc
+          hostPath:
+            path: /proc
+            type: Directory

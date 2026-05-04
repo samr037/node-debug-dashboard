@@ -1,0 +1,30 @@
+Thank you for installing {{ .Chart.Name }} ({{ .Chart.Version }}).
+
+Each node now runs the dashboard on host port {{ .Values.httpPort }}.
+
+  Web UI:    http://<node-ip>:{{ .Values.httpPort }}/
+  API docs:  http://<node-ip>:{{ .Values.httpPort }}/docs
+
+{{- if .Values.ssh.enabled }}
+
+SSH debug shell is ENABLED on port {{ .Values.ssh.port }}.
+  {{- if .Values.ssh.passwordAuth }}
+
+  ⚠️  PASSWORD AUTHENTICATION IS ON. Default credentials (debug:debug, root:root)
+      are baked into the image. Override them or restrict network access before
+      exposing this beyond a private cluster network.
+  {{- else }}
+  Authentication: public key only (good).
+  {{- end }}
+{{- else }}
+
+SSH debug shell is DISABLED. To enable:
+
+  helm upgrade {{ .Release.Name }} <chart> \
+    --set ssh.enabled=true \
+    --set-file ssh.authorizedKeys=$HOME/.ssh/id_ed25519.pub
+{{- end }}
+
+To watch the rollout:
+
+  kubectl -n {{ .Release.Namespace }} rollout status ds/{{ include "node-debug-dashboard.fullname" . }}

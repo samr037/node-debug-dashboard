@@ -1,0 +1,67 @@
+# Default values for node-debug-dashboard.
+
+image:
+  repository: ghcr.io/samr037/node-debug-dashboard
+  # tag defaults to .Chart.AppVersion if unset
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# HTTP dashboard / REST API port (host port, since hostNetwork is required).
+httpPort: 80
+
+# SSH debug shell — disabled by default (secure-by-default).
+# To enable: set ssh.enabled=true and provide ssh.authorizedKeys.
+ssh:
+  enabled: false
+  port: 2022
+  passwordAuth: false
+  # Newline-separated public keys, e.g.:
+  #   ssh-ed25519 AAAA... user@host
+  #   ssh-rsa AAAA... other@host
+  authorizedKeys: ""
+
+# Privileged host access — required for hardware/Kubernetes/etcd diagnostics.
+# Do not change unless you know what you are doing.
+hostNetwork: true
+hostPID: true
+hostIPC: true
+privileged: true
+
+# Mount the host root at /host (required for SMART, sensors, EFI, Talos diagnostics).
+hostRootMount: true
+
+# RBAC: ServiceAccount + ClusterRole/Binding with read access on
+# nodes, pods, services, endpoints, events — used by Kubernetes / kdiag-* features.
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+
+# Run on every node by default. Override to scope to specific nodes.
+tolerations:
+  - operator: Exists
+
+nodeSelector: {}
+affinity: {}
+
+resources:
+  # Defaults are conservative — adjust based on cluster size.
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+priorityClassName: ""
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext: {}
