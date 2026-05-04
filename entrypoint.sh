@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-SSH_ENABLED="${SSH_ENABLED:-true}"
+SSH_ENABLED="${SSH_ENABLED:-false}"
 SSH_PORT="${SSH_PORT:-2022}"
-SSH_PASSWORD_AUTH="${SSH_PASSWORD_AUTH:-true}"
+SSH_PASSWORD_AUTH="${SSH_PASSWORD_AUTH:-false}"
 SSH_AUTHORIZED_KEYS="${SSH_AUTHORIZED_KEYS:-}"
 
 if [ "$SSH_ENABLED" = "true" ] || [ "$SSH_ENABLED" = "1" ] || [ "$SSH_ENABLED" = "yes" ]; then

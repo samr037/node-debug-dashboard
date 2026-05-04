@@ -476,6 +476,6 @@ help() {
     dash_ip=$(ip -4 addr show 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d/ -f1 | grep '^192\.168\.' | head -1)
     echo -e "    Dashboard    ${BL}http://${dash_ip:-<node-ip>}/${R}"
     echo -e "    API Docs     ${BL}http://${dash_ip:-<node-ip>}/docs${R}"
-    echo -e "    SSH Docs     ${BL}https://gitlab.iostack.fr/iostack/node-debug-dashboard/-/blob/main/docs/ssh.md${R}"
+    echo -e "    SSH Docs     ${BL}https://github.com/samr037/node-debug-dashboard/blob/main/docs/ssh.md${R}"
     echo ""
 }
