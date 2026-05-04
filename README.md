@@ -3,7 +3,7 @@
 > Hardware monitoring, Kubernetes diagnostics, and container debugging for Kubernetes nodes — accessible as a web dashboard, REST API, and SSH shell.
 
 <p align="left">
-  <a href="https://www.talos.dev"><img src="https://raw.githubusercontent.com/siderolabs/talos/main/website/static/img/logo.svg" alt="Talos Linux" height="48"></a>
+  <a href="https://www.talos.dev"><img src="docs/talos-logo.svg" alt="Talos Linux" height="48"></a>
 </p>
 
 ![Dashboard Demo](docs/screenshots/dashboard-demo.gif)

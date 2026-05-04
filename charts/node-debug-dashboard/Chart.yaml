@@ -21,7 +21,7 @@ keywords:
 maintainers:
   - name: samr037
     url: https://github.com/samr037
-icon: https://raw.githubusercontent.com/siderolabs/talos/main/website/static/img/logo.svg
+icon: https://raw.githubusercontent.com/samr037/node-debug-dashboard/main/docs/talos-logo.svg
 annotations:
   artifacthub.io/category: monitoring-logging
   artifacthub.io/license: MIT
