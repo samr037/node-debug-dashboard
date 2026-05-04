@@ -200,14 +200,16 @@ spec:
             privileged: true
           ports:
             - containerPort: 80
-            - containerPort: 2022
+            - containerPort: 2022  # only used if SSH_ENABLED=true
           env:
             - name: KUBERNETES_NODE_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            # SSH is disabled by default. To enable, set SSH_ENABLED=true
+            # and provide your own public key in SSH_AUTHORIZED_KEYS.
             - name: SSH_ENABLED
-              value: "true"
+              value: "false"
             - name: SSH_PASSWORD_AUTH
               value: "false"
             - name: SSH_AUTHORIZED_KEYS
@@ -287,10 +289,19 @@ docker run --privileged --net=host --pid=host \
 | `CACHE_TTL` | `10` | Default collector cache TTL in seconds |
 | `COMMAND_TIMEOUT` | `10` | Subprocess timeout in seconds |
 | `KUBERNETES_NODE_NAME` | — | Node name (set via fieldRef in K8s) |
-| `SSH_ENABLED` | `true` | Enable/disable the SSH server |
+| `SSH_ENABLED` | `false` | Enable/disable the SSH server |
 | `SSH_PORT` | `2022` | SSH listen port |
-| `SSH_PASSWORD_AUTH` | `true` | Enable/disable password authentication |
+| `SSH_PASSWORD_AUTH` | `false` | Enable/disable password authentication |
 | `SSH_AUTHORIZED_KEYS` | — | Newline-separated public keys for SSH access |
+
+### Security
+
+The container ships with default passwords (`debug:debug`, `root:root`) and passwordless `sudo` for the `debug` user, intentionally — this is a **debugging tool meant to run inside a private cluster**, not on the public internet. Before deploying:
+
+- Set `SSH_PASSWORD_AUTH=false` and provide `SSH_AUTHORIZED_KEYS` (the recommended DaemonSet above already does this).
+- Do not expose port `2022` outside the cluster network. If you must, put it behind a bastion / VPN.
+- If you need password auth, override the defaults at runtime (e.g. via your own entrypoint or by baking a derived image with new `chpasswd` calls).
+- The pod runs `privileged: true` with the host root mounted at `/host` — treat SSH access as equivalent to root on the node.
 
 ### Caching Tiers
 
