@@ -12,13 +12,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mtr-tiny tcpdump tshark nmap ncat socat iperf3 ethtool bridge-utils \
     iptables nftables conntrack iw wireless-tools \
     # Process & performance
-    htop btop procps sysstat iotop dstat strace ltrace lsof psmisc \
+    htop btop procps sysstat iotop dstat strace lsof psmisc \
     # Disk & filesystem
     util-linux fdisk gdisk parted lvm2 mdadm smartmontools \
     hdparm nvme-cli fio blktrace e2fsprogs xfsprogs btrfs-progs \
     dosfstools lsscsi sysfsutils \
     # Hardware inspection
-    dmidecode lshw pciutils usbutils cpuid numactl hwinfo efibootmgr \
+    dmidecode lshw pciutils usbutils numactl hwinfo efibootmgr \
     # Stress testing
     stress-ng memtester \
     # Utilities
@@ -28,13 +28,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# amd64-only tooling
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends cpuid \
+      && apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # Generate locale for proper Unicode rendering
 RUN sed -i '/en_US.UTF-8/s/^# //' /etc/locale.gen && locale-gen
 ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 
 # CRI tools (crictl) for container inspection
 ARG CRICTL_VERSION=v1.32.0
-RUN curl -fsSL "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-amd64.tar.gz" \
+RUN curl -fsSL "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-${TARGETARCH}.tar.gz" \
     | tar -xz -C /usr/local/bin \
     && chmod +x /usr/local/bin/crictl \
     && printf 'runtime-endpoint: unix:///host/run/containerd/containerd.sock\nimage-endpoint: unix:///host/run/containerd/containerd.sock\n' > /etc/crictl.yaml
