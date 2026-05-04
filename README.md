@@ -2,7 +2,19 @@
 
 > Hardware monitoring, Kubernetes diagnostics, and container debugging for Kubernetes nodes — accessible as a web dashboard, REST API, and SSH shell.
 
+<p align="left">
+  <a href="https://www.talos.dev"><img src="https://raw.githubusercontent.com/siderolabs/talos/main/website/static/img/logo.svg" alt="Talos Linux" height="48"></a>
+</p>
+
 ![Dashboard Demo](docs/screenshots/dashboard-demo.gif)
+
+## Why this exists
+
+[Talos Linux](https://www.talos.dev) is API-driven, immutable, and shell-less by design — there's no SSH on the host, no package manager, no ad-hoc tooling. That's exactly what makes it one of the most secure ways to run Kubernetes, but it also makes node-level debugging harder than on a traditional Linux distro: when a disk degrades, a NIC misbehaves, ECC errors creep in, or etcd starts flapping, you can't just `ssh` in and poke around.
+
+This dashboard fills that gap **without compromising Talos's posture**. It runs as a privileged DaemonSet on each node, surfaces hardware / storage / network / Kubernetes / etcd diagnostics over a web UI and REST API, and provides an opt-in SSH debug shell with curated `ndiag-*` and `kdiag-*` scripts. Pure observability — the host stays immutable.
+
+It also works on any Kubernetes distribution, but the `kdiag-*` and Talos-aware sections (machine type, schematic, etcd via `/system/secrets/etcd/`, Talos extensions, EFI boot order) are where it shines.
 
 ## Features
 
