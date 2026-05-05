@@ -6,7 +6,8 @@
   <a href="https://www.talos.dev"><img src="docs/talos-logo.svg" alt="Talos Linux" height="48"></a>
 </p>
 
-> **Heads up:** this is a debug / observability tool. Each pod runs as `privileged: true` with `hostNetwork`, `hostPID`, and the host filesystem mounted at `/host`. Anyone with HTTP access to port 80 on a node gets a full read of that node. Don't expose it to untrusted networks. Treat enabling SSH (off by default) as equivalent to granting node-root.
+> [!WARNING]
+> ⚠️ **Debug / observability tool — privileged workload.** Each pod runs as `privileged: true` with `hostNetwork`, `hostPID`, and the host filesystem mounted at `/host`. Anyone with HTTP access to port 80 on a node gets a full read of that node. Don't expose it to untrusted networks. Treat enabling SSH (off by default) as equivalent to granting node-root.
 
 ![Dashboard Demo](docs/screenshots/dashboard-demo.gif)
 
