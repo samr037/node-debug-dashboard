@@ -10,11 +10,13 @@
 
 ## Why this exists
 
-[Talos Linux](https://www.talos.dev) has no shell, no package manager, and no SSH on the host. That makes it harder to look at things when a disk degrades, a NIC misbehaves, ECC errors show up, or etcd starts flapping.
+[Talos Linux](https://www.talos.dev) has no shell, no package manager, and no SSH on the host. That's a security feature, but it's friction for teams coming from a traditional distro. The reflex when something's wrong is to `ssh` in and run `smartctl`, `lsblk`, `dmesg`, or `tcpdump`. On Talos that workflow is gone: to add a tool to the host you have to ship a system extension and rebootstrap the node.
 
-This dashboard runs as a privileged DaemonSet, exposes hardware, storage, network, Kubernetes, and etcd state over an HTTP UI and REST API, and ships an opt-in SSH shell with `ndiag-*` and `kdiag-*` diagnostic scripts. The host is never modified.
+This dashboard re-adds those tools without putting them on the host. It runs as a privileged DaemonSet, ships the usual Linux diagnostic tools (smartctl, ethtool, dmidecode, tcpdump, plus the `ndiag-*` and `kdiag-*` scripts), and exposes them over an HTTP UI, a REST API, and an opt-in SSH shell.
 
-It works on any Kubernetes distribution. Talos-specific bits: machine type, schematic, extensions, etcd certificates at `/system/secrets/etcd/`, EFI boot entries.
+When you need a new tool, add it to the image and `helm upgrade`. No system extension, no node reboot. Same upgrade path for bug fixes and new diagnostic checks.
+
+It works on any Kubernetes distribution. The Talos-aware sections (machine type, schematic ID, extensions, etcd certs at `/system/secrets/etcd/`, EFI boot entries) are inactive elsewhere.
 
 ## Features
 
