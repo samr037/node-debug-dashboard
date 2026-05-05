@@ -308,9 +308,9 @@ The container ships with 200+ tools organized by category:
 
 | Environment Variable | Default | Description |
 |---|---|---|
-| `SSH_ENABLED` | `true` | Enable/disable SSH server |
+| `SSH_ENABLED` | `false` | Enable/disable SSH server |
 | `SSH_PORT` | `2022` | SSH listen port |
-| `SSH_PASSWORD_AUTH` | `true` | Allow password login |
+| `SSH_PASSWORD_AUTH` | `false` | Allow password login |
 | `SSH_AUTHORIZED_KEYS` | — | Newline-separated public keys |
 
 ### Key-based Auth via Kubernetes Secret
@@ -324,7 +324,9 @@ env:
         key: authorized_keys
 ```
 
-Or mount as a file:
+Or mount the secret as a directory containing an `authorized_keys` file
+(the entrypoint reads `/root/.ssh/authorized_keys_mount/authorized_keys`,
+so the secret must have a key named `authorized_keys`):
 
 ```yaml
 volumeMounts:
@@ -335,6 +337,7 @@ volumes:
   - name: ssh-keys
     secret:
       secretName: ssh-authorized-keys
+      # secret data must be keyed as `authorized_keys`
 ```
 
 ## Vim Keybindings

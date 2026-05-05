@@ -207,7 +207,7 @@ spec:
         - operator: Exists
       containers:
         - name: dashboard
-          image: your-registry/node-debug-dashboard:latest
+          image: ghcr.io/samr037/node-debug-dashboard:latest
           securityContext:
             privileged: true
           ports:
@@ -250,7 +250,7 @@ docker run --privileged --net=host --pid=host \
   -v /:/host:ro -v /proc:/host-proc:ro \
   -e SSH_ENABLED=true \
   -p 80:80 -p 2022:2022 \
-  your-registry/node-debug-dashboard:latest
+  ghcr.io/samr037/node-debug-dashboard:latest
 ```
 
 ## API Reference

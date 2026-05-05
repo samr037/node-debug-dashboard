@@ -648,9 +648,9 @@ function renderKubernetes(k8s) {
                 compHtml += table(['Name', 'ID', 'Client URLs', 'Peer URLs'],
                     e.members.map(m => [
                         esc(m.name),
-                        m.id === e.leader_id ? severityBadge('ok', m.id + ' (leader)') : esc(m.id),
-                        (m.client_urls || []).join(', '),
-                        (m.peer_urls || []).join(', ')
+                        m.id === e.leader_id ? severityBadge('ok', esc(m.id) + ' (leader)') : esc(m.id),
+                        (m.client_urls || []).map(esc).join(', '),
+                        (m.peer_urls || []).map(esc).join(', ')
                     ])
                 );
             }

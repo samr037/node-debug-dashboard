@@ -83,7 +83,7 @@ class ClusterNode(BaseModel):
 class SSHInfo(BaseModel):
     enabled: bool = False
     port: int = 2022
-    password_auth: bool = True
+    password_auth: bool = False
 
 
 class KubernetesOverview(BaseModel):

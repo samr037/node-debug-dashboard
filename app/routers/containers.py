@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -74,12 +75,25 @@ async def container_logs(websocket: WebSocket, container_id: str):
         await websocket.close()
         return
 
+    # Defence-in-depth: crictl reports the log path, but a malicious workload
+    # could supply a path or symlink pointing outside the pod log tree. Resolve
+    # symlinks and require the result to live under HOST_ROOT/var/log/pods.
+    allowed_root = os.path.realpath(f"{HOST_ROOT}/var/log/pods")
+    try:
+        real_log_path = os.path.realpath(log_path)
+    except OSError:
+        real_log_path = ""
+    if not real_log_path.startswith(allowed_root + os.sep):
+        await websocket.send_text("[Error: log path outside allowed pod log tree]\n")
+        await websocket.close()
+        return
+
     process = await asyncio.create_subprocess_exec(
         "tail",
         "-n",
         "200",
         "-f",
-        log_path,
+        real_log_path,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
