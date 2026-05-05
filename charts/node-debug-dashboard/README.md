@@ -4,12 +4,17 @@ Helm chart for [node-debug-dashboard](https://github.com/samr037/node-debug-dash
 
 ## Install
 
+The chart's pods need PodSecurity `privileged`. Easiest path is to let the
+chart create the namespace for you with the right labels (set
+`namespace.create=true`, do **not** pass `--create-namespace`):
+
 OCI registry (Helm 3.8+):
 
 ```bash
 helm install ndd oci://ghcr.io/samr037/charts/node-debug-dashboard \
-  --version 0.1.0 \
-  --namespace node-debug --create-namespace
+  --version 0.2.0 \
+  --namespace node-debug \
+  --set namespace.create=true
 ```
 
 Or via `helm repo`:
@@ -18,7 +23,16 @@ Or via `helm repo`:
 helm repo add node-debug-dashboard https://samr037.github.io/node-debug-dashboard
 helm repo update
 helm install ndd node-debug-dashboard/node-debug-dashboard \
-  --namespace node-debug --create-namespace
+  --namespace node-debug \
+  --set namespace.create=true
+```
+
+If you'd rather manage the namespace yourself, label it before installing:
+
+```bash
+kubectl create ns node-debug
+kubectl label ns node-debug pod-security.kubernetes.io/enforce=privileged
+helm install ndd node-debug-dashboard/node-debug-dashboard -n node-debug
 ```
 
 The dashboard is then on host port 80 of every node.

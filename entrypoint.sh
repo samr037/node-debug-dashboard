@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 
+HTTP_PORT="${HTTP_PORT:-80}"
 SSH_ENABLED="${SSH_ENABLED:-false}"
 SSH_PORT="${SSH_PORT:-2022}"
 SSH_PASSWORD_AUTH="${SSH_PASSWORD_AUTH:-false}"
@@ -51,11 +52,11 @@ fi
 
 echo "======================================="
 echo " Node Debug Dashboard"
-echo " HTTP dashboard on port 80"
+echo " HTTP dashboard on port ${HTTP_PORT}"
 [ "$SSH_ENABLED" = "true" ] && echo " SSH on port ${SSH_PORT} (zsh + oh-my-zsh)"
 echo " Host filesystem at /host"
 echo "======================================="
 
 # Start the dashboard API (PID 1)
 cd /opt/node-dashboard
-exec uvicorn app.main:app --host 0.0.0.0 --port 80 --workers 1 --log-level info
+exec uvicorn app.main:app --host 0.0.0.0 --port "${HTTP_PORT}" --workers 1 --log-level info
