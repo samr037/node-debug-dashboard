@@ -33,13 +33,6 @@ privileged: true
 # Mount host / at /host. Required for SMART, sensors, EFI, Talos bits.
 hostRootMount: true
 
-# Create the release namespace with PodSecurity privileged labels
-# (required because the DaemonSet is privileged + hostPath + hostNetwork).
-# Set to false if the namespace already exists or you manage it separately.
-# When true, do NOT pass --create-namespace to helm install.
-namespace:
-  create: false
-
 # Read-only access on nodes, pods, services, endpoints, events.
 # Used by the Kubernetes section and kdiag-* scripts.
 serviceAccount:
