@@ -305,13 +305,31 @@ docker run --privileged --net=host --pid=host \
 | `HOST_PROC` | `/host-proc` | Host /proc mount path |
 | `CACHE_TTL` | `10` | Default collector cache TTL in seconds |
 | `COMMAND_TIMEOUT` | `10` | Subprocess timeout in seconds |
+| `DMESG_WINDOW_HOURS` | `168` | How far back to scan the kernel ring buffer for faults |
 | `KUBERNETES_NODE_NAME` | — | Node name (set via fieldRef in K8s) |
+| `AUTH_TOKEN` | — | If set, require `Authorization: Bearer <token>` |
+| `AUTH_USERNAME` | `debug` | Username for HTTP Basic auth |
+| `AUTH_PASSWORD` | — | If set, require HTTP Basic auth |
 | `SSH_ENABLED` | `false` | Enable/disable the SSH server |
 | `SSH_PORT` | `2022` | SSH listen port |
 | `SSH_PASSWORD_AUTH` | `false` | Enable/disable password authentication |
 | `SSH_AUTHORIZED_KEYS` | — | Newline-separated public keys for SSH access |
 
 ### Security
+
+**The dashboard is unauthenticated unless you configure it.** It runs with
+`hostNetwork`, so it binds a port on the node's own address and anything that
+can route to the node can read its process table, container inventory,
+certificate details and hardware. Set `AUTH_PASSWORD` (HTTP Basic, so a
+browser will prompt) or `AUTH_TOKEN` (bearer, for scripts), and pair it with a
+NetworkPolicy — the chart ships one, off by default. `/api/health` stays open
+so the kubelet can still probe it.
+
+```bash
+helm install ndd . \
+  --set auth.password=... \
+  --set networkPolicy.enabled=true
+```
 
 The image contains hardcoded passwords (`debug:debug`, `root:root`) and passwordless `sudo` for the `debug` user. SSH is off by default; if you turn it on, use key-based auth.
 

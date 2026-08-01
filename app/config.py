@@ -22,3 +22,14 @@ SSH_PASSWORD_AUTH = os.environ.get("SSH_PASSWORD_AUTH", "false").lower() in (
     "yes",
 )
 SSH_AUTHORIZED_KEYS = os.environ.get("SSH_AUTHORIZED_KEYS", "")  # newline-separated
+
+# Dashboard authentication. Unset by default, which leaves the dashboard
+# open exactly as before — this runs with hostNetwork, so an open dashboard
+# is reachable by anything that can route to the node, and a full read of
+# the node is one request away. Set either of these to require credentials.
+#
+#   AUTH_TOKEN     accepted as "Authorization: Bearer <token>"
+#   AUTH_PASSWORD  accepted as HTTP Basic, so a browser can prompt for it
+AUTH_TOKEN = os.environ.get("AUTH_TOKEN", "")
+AUTH_USERNAME = os.environ.get("AUTH_USERNAME", "debug")
+AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "")

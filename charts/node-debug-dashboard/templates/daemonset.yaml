@@ -78,6 +78,39 @@ spec:
               value: |
                 {{- . | nindent 16 }}
             {{- end }}
+            {{- if .Values.dmesgWindowHours }}
+            - name: DMESG_WINDOW_HOURS
+              value: {{ .Values.dmesgWindowHours | quote }}
+            {{- end }}
+            {{- if or .Values.auth.token .Values.auth.password }}
+            - name: AUTH_USERNAME
+              value: {{ .Values.auth.username | quote }}
+            {{- if .Values.auth.existingSecret }}
+            {{- if .Values.auth.token }}
+            - name: AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.tokenKey }}
+            {{- end }}
+            {{- if .Values.auth.password }}
+            - name: AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.passwordKey }}
+            {{- end }}
+            {{- else }}
+            {{- with .Values.auth.token }}
+            - name: AUTH_TOKEN
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.auth.password }}
+            - name: AUTH_PASSWORD
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:

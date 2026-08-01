@@ -13,6 +13,27 @@ fullnameOverride: ""
 # Host port for the dashboard / REST API (uses hostNetwork).
 httpPort: 80
 
+# Dashboard authentication. Unset means no authentication, which combined
+# with hostNetwork leaves a full read of the node open to anything that can
+# route to it. Set one of these, and prefer existingSecret over putting a
+# credential in values.
+#
+#   token     "Authorization: Bearer <token>", for scripts
+#   password  HTTP Basic, so a browser prompts for it
+auth:
+  username: debug
+  token: ""
+  password: ""
+  # Source the values from an existing Secret instead. When set, token and
+  # password above act as switches for which keys to wire up.
+  existingSecret: ""
+  tokenKey: token
+  passwordKey: password
+
+# How far back to scan the kernel ring buffer for faults. Empty uses the
+# application default of one week.
+dmesgWindowHours: ""
+
 # SSH debug shell. Off by default. To enable, set ssh.enabled=true and
 # pass keys via ssh.authorizedKeys.
 ssh:

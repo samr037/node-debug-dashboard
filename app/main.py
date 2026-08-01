@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from app.auth import AuthMiddleware
 from app.httpclient import close_clients
 from app.routers import (
     containers,
@@ -32,6 +33,10 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+# Wraps everything, including the static frontend and the WebSocket log
+# stream, so enabling it does not leave a side door open.
+app.add_middleware(AuthMiddleware)
 
 # API routers
 app.include_router(node.router, prefix="/api")
