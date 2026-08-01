@@ -78,6 +78,10 @@ spec:
               value: |
                 {{- . | nindent 16 }}
             {{- end }}
+            {{- with .Values.ssh.password }}
+            - name: SSH_PASSWORD
+              value: {{ . | quote }}
+            {{- end }}
             {{- if .Values.dmesgWindowHours }}
             - name: DMESG_WINDOW_HOURS
               value: {{ .Values.dmesgWindowHours | quote }}

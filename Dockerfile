@@ -69,10 +69,13 @@ RUN chmod +x entrypoint.sh /etc/profile.d/motd.sh /opt/node-dashboard/scripts/*
 
 # SSH & user setup
 RUN mkdir -p /run/sshd && \
-    # Create debug user with zsh
+    # Create debug user with zsh. Both accounts are left locked: a published
+    # image with a known password is a credential anyone can look up, and
+    # this one grants root on the node. Set SSH_PASSWORD at runtime if you
+    # genuinely need password auth; otherwise use SSH_AUTHORIZED_KEYS.
     useradd -m -s /bin/zsh -G sudo debug && \
-    echo "debug:debug" | chpasswd && \
-    echo "root:root" | chpasswd && \
+    passwd -l debug && \
+    passwd -l root && \
     chsh -s /bin/zsh root && \
     echo "debug ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/debug && \
     cp ssh_config.conf /etc/ssh/sshd_config.d/debug.conf && \

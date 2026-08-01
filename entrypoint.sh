@@ -11,9 +11,18 @@ if [ "$SSH_ENABLED" = "true" ] || [ "$SSH_ENABLED" = "1" ] || [ "$SSH_ENABLED" =
     # Generate SSH host keys if missing
     ssh-keygen -A
 
-    # Configure password authentication
+    # Configure password authentication. The image ships both accounts
+    # locked, so enabling password auth without supplying one would leave
+    # sshd accepting passwords that no account can satisfy.
     if [ "$SSH_PASSWORD_AUTH" = "true" ] || [ "$SSH_PASSWORD_AUTH" = "1" ] || [ "$SSH_PASSWORD_AUTH" = "yes" ]; then
-        sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config.d/debug.conf
+        if [ -z "$SSH_PASSWORD" ]; then
+            echo "SSH_PASSWORD_AUTH is set but SSH_PASSWORD is empty — refusing to enable password auth." >&2
+            echo "Set SSH_PASSWORD, or use SSH_AUTHORIZED_KEYS for key-based access." >&2
+            sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config.d/debug.conf
+        else
+            echo "debug:${SSH_PASSWORD}" | chpasswd
+            sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config.d/debug.conf
+        fi
     else
         sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config.d/debug.conf
     fi

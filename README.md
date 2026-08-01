@@ -312,7 +312,8 @@ docker run --privileged --net=host --pid=host \
 | `AUTH_PASSWORD` | — | If set, require HTTP Basic auth |
 | `SSH_ENABLED` | `false` | Enable/disable the SSH server |
 | `SSH_PORT` | `2022` | SSH listen port |
-| `SSH_PASSWORD_AUTH` | `false` | Enable/disable password authentication |
+| `SSH_PASSWORD_AUTH` | `false` | Enable/disable password authentication (requires `SSH_PASSWORD`) |
+| `SSH_PASSWORD` | — | Password for the `debug` user; accounts ship locked without it |
 | `SSH_AUTHORIZED_KEYS` | — | Newline-separated public keys for SSH access |
 
 ### Security
@@ -331,11 +332,11 @@ helm install ndd . \
   --set networkPolicy.enabled=true
 ```
 
-The image contains hardcoded passwords (`debug:debug`, `root:root`) and passwordless `sudo` for the `debug` user. SSH is off by default; if you turn it on, use key-based auth.
+Both accounts in the image ship locked, and the `debug` user has passwordless `sudo`. SSH is off by default; if you turn it on, use key-based auth.
 
 - Keep `SSH_PASSWORD_AUTH=false` and pass keys via `SSH_AUTHORIZED_KEYS`.
 - Don't expose port 2022 outside the cluster network.
-- To use password auth, change the `chpasswd` calls in a derived image rather than the defaults shipped here.
+- Password auth requires setting `SSH_PASSWORD` at runtime. Without it the entrypoint refuses to enable password authentication rather than starting sshd in a state no account can satisfy.
 - The pod runs `privileged: true` with `/` mounted at `/host`. SSH access is equivalent to root on the node.
 
 ### Caching Tiers

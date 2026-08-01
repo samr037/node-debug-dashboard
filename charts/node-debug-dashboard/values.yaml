@@ -58,6 +58,9 @@ ssh:
   #   ssh-ed25519 AAAA... user@host
   #   ssh-rsa AAAA... other@host
   authorizedKeys: ""
+  # Required if passwordAuth is true — the image ships both accounts locked,
+  # so there is no default password to fall back on.
+  password: ""
 
 # Required for hardware, Kubernetes, and etcd diagnostics.
 hostNetwork: true
