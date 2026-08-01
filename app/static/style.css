@@ -510,6 +510,19 @@ tr:hover td {
 .sev-critical { color: var(--red); }
 .sev-unknown { color: var(--text-dim); }
 
+/* Table cell variants, previously inline styles on generated markup. */
+.cmd-cell {
+    font-size: 11px;
+    max-width: 400px;
+    display: inline-block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.image-cell { font-size: 11px; color: var(--text-dim); }
+.fingerprint-cell { font-size: 10px; color: var(--text-dim); }
+.path-cell { font-size: 11px; color: var(--text-dim); }
+
 /* Footer */
 .footer {
     background: var(--bg-card);

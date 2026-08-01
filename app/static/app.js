@@ -182,7 +182,7 @@ function renderClusterBar(nodes, ssh) {
         currentHtml = `${roleTag} <span class="cn-name">${esc(current.name)}</span> <span class="cn-ip">${esc(current.ip)}</span>`;
         if (sshInfo.enabled) {
             const sshCmd = `ssh -p ${sshInfo.port} debug@${current.ip}`;
-            currentHtml += ` <span class="ssh-badge" title="Click to copy: ${sshCmd}" onclick="navigator.clipboard.writeText('${sshCmd}');this.textContent='Copied!';setTimeout(()=>this.textContent='SSH',1000)">SSH</span>`;
+            currentHtml += ` <span class="ssh-badge" title="Click to copy: ${esc(sshCmd)}" data-copy="${esc(sshCmd)}">SSH</span>`;
         }
     }
     document.getElementById('cluster-current').innerHTML = currentHtml;
@@ -201,10 +201,11 @@ function renderClusterList(query) {
         const role = n.role === 'control-plane' ? '<span class="cn-role cn-cp">CP</span>' : '<span class="cn-role cn-wk">W</span>';
         const link = n.current ? '#' : `http://${n.ip}/?theme=${theme}`;
         const cls = n.current ? 'cluster-item current' : 'cluster-item';
+        const sshCmd = `ssh -p ${sshInfo.port} debug@${n.ip}`;
         const sshBadge = sshInfo.enabled && n.ready
-            ? `<span class="ssh-badge-sm" title="ssh -p ${sshInfo.port} debug@${n.ip}" onclick="event.preventDefault();navigator.clipboard.writeText('ssh -p ${sshInfo.port} debug@${n.ip}');this.textContent='Copied!';setTimeout(()=>this.textContent='SSH',1000)">SSH</span>`
+            ? `<span class="ssh-badge-sm" title="${esc(sshCmd)}" data-copy="${esc(sshCmd)}">SSH</span>`
             : '';
-        return `<a href="${link}" class="${cls}">${dot}${role}<span class="cn-name">${esc(n.name)}</span>${sshBadge}<span class="cn-ip">${esc(n.ip)}</span></a>`;
+        return `<a href="${esc(link)}" class="${cls}">${dot}${role}<span class="cn-name">${esc(n.name)}</span>${sshBadge}<span class="cn-ip">${esc(n.ip)}</span></a>`;
     }).join('');
 }
 
@@ -336,7 +337,7 @@ function renderHardware(hw) {
             ['Name', 'MAC', 'Driver', 'Speed', 'Link', 'IPs', 'Errors'],
             hw.nics.map(n => [
                 n.name, n.mac, n.driver || '-', n.speed || '-',
-                n.link_detected ? '<span class="sev-ok">up</span>' : '<span class="sev-critical">down</span>',
+                raw(n.link_detected ? '<span class="sev-ok">up</span>' : '<span class="sev-critical">down</span>'),
                 n.ip_addresses.join(', ') || '-',
                 (n.rx_errors + n.tx_errors + n.rx_crc_errors + n.tx_carrier_errors) || '0'
             ])
@@ -359,7 +360,7 @@ function renderHardware(hw) {
                     `${r.value} ${r.unit}`,
                     r.warning != null ? `${r.warning} ${r.unit}` : '-',
                     r.critical != null ? `${r.critical} ${r.unit}` : '-',
-                    r.is_alarm ? '<span class="sev-critical">ALARM</span>' : '<span class="sev-ok">OK</span>'
+                    raw(r.is_alarm ? '<span class="sev-critical">ALARM</span>' : '<span class="sev-ok">OK</span>')
                 ])
             );
         }
@@ -450,7 +451,7 @@ function renderStorage(storage) {
             ['Filesystem', 'Mount', 'Type', 'Size', 'Used', 'Avail', 'Used%'],
             storage.usage.map(u => [
                 u.filesystem, u.mount, u.fs_type, u.size, u.used, u.available,
-                `<span class="sev-${u.severity}">${u.used_percent}%</span>`
+                raw(`<span class="sev-${u.severity}">${u.used_percent}%</span>`)
             ])
         ));
     }
@@ -475,9 +476,9 @@ function renderSystem(sys) {
             ['#', 'Active', 'Label', 'Path'],
             efi.entries.map(e => [
                 e.number,
-                e.active ? '<span class="sev-ok">*</span>' : '',
+                raw(e.active ? '<span class="sev-ok">*</span>' : ''),
                 e.label,
-                `<span style="color:var(--text-dim);font-size:11px">${esc(e.path)}</span>`
+                raw(`<span class="path-cell">${esc(e.path)}</span>`)
             ])
         );
         html += subSection('sys-efi', 'UEFI Boot Order', efiHtml);
@@ -509,7 +510,7 @@ function renderNetwork(net) {
             ['Name', 'MAC', 'Driver', 'Speed', 'Duplex', 'Link', 'IPs'],
             net.interfaces.map(n => [
                 n.name, n.mac, n.driver || '-', n.speed || '-', n.duplex || '-',
-                n.link_detected ? '<span class="sev-ok">up</span>' : '<span class="sev-critical">down</span>',
+                raw(n.link_detected ? '<span class="sev-ok">up</span>' : '<span class="sev-critical">down</span>'),
                 n.ip_addresses.join(', ') || '-'
             ])
         ));
@@ -520,11 +521,25 @@ function renderNetwork(net) {
 }
 
 // ── Helpers ──
+// Escapes quotes as well as angle brackets, so the result is safe to drop
+// into an attribute value and not just into text. Assigning to textContent
+// and reading back innerHTML, as this used to, leaves ' and " untouched.
+const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
 function esc(s) {
     if (s == null) return '';
-    const d = document.createElement('div');
-    d.textContent = String(s);
-    return d.innerHTML;
+    return String(s).replace(/[&<>"']/g, c => ESCAPES[c]);
+}
+
+// Marks a string as markup this code built, so table() will not escape it.
+// Everything else in a cell is data from the node — device model strings,
+// USB descriptors, pod names — and gets escaped.
+function raw(html) {
+    return { __html: html };
+}
+
+function cellHtml(cell) {
+    return cell != null && cell.__html !== undefined ? cell.__html : esc(cell);
 }
 
 function table(headers, rows) {
@@ -533,7 +548,7 @@ function table(headers, rows) {
     html += '</tr></thead><tbody>';
     for (const row of rows) {
         html += '<tr>';
-        for (const cell of row) html += `<td>${cell}</td>`;  // cells may contain HTML
+        for (const cell of row) html += `<td>${cellHtml(cell)}</td>`;
         html += '</tr>';
     }
     html += '</tbody></table>';
@@ -544,8 +559,11 @@ function subSection(id, title, content) {
     return `<details data-id="${esc(id)}" class="sub-section"><summary>${esc(title)}</summary><div class="section-content">${content}</div></details>`;
 }
 
+// Returns markup, so callers placing it in a table cell must wrap it in
+// raw(). The label is escaped here because several callers pass values
+// straight off the node, such as a container state from the CRI.
 function severityBadge(severity, text) {
-    return `<span class="sev-${severity}">${text}</span>`;
+    return `<span class="sev-${esc(severity)}">${esc(text)}</span>`;
 }
 
 function humanBytes(bytes) {
@@ -586,7 +604,7 @@ function renderKubernetes(k8s) {
         nodeHtml += table(['Type', 'Status', 'Reason', 'Last Transition'],
             ni.conditions.map(c => {
                 const ok = (c.type === 'Ready' && c.status === 'True') || (c.type !== 'Ready' && c.status === 'False');
-                return [c.type, severityBadge(ok ? 'ok' : 'critical', c.status), c.reason, c.last_transition];
+                return [c.type, raw(severityBadge(ok ? 'ok' : 'critical', c.status)), c.reason, c.last_transition];
             })
         );
     }
@@ -619,9 +637,9 @@ function renderKubernetes(k8s) {
             ['File', 'Subject', 'Issuer', 'Not After', 'Expires In', 'Fingerprint'],
             k8s.certificates.map(c => [
                 c.file_path.split('/').pop(),
-                esc(c.subject), esc(c.issuer), esc(c.not_after),
-                severityBadge(c.expiry_severity, (c.days_until_expiry != null ? c.days_until_expiry + 'd' : '-')),
-                `<span style="font-size:10px;color:var(--text-dim)">${esc((c.sha256_fingerprint || '').substring(0, 24))}...</span>`
+                c.subject, c.issuer, c.not_after,
+                raw(severityBadge(c.expiry_severity, (c.days_until_expiry != null ? c.days_until_expiry + 'd' : '-'))),
+                raw(`<span class="fingerprint-cell">${esc((c.sha256_fingerprint || '').substring(0, 24))}...</span>`)
             ])
         ));
     }
@@ -632,8 +650,8 @@ function renderKubernetes(k8s) {
             ['Name', 'Running', 'Health', 'Uptime'],
             k8s.components.map(c => [
                 c.name,
-                c.running ? severityBadge('ok', 'Yes') : severityBadge('critical', 'No'),
-                severityBadge(c.health_status === 'Healthy' ? 'ok' : c.health_status === 'Unknown' ? '' : 'critical', c.health_status),
+                raw(c.running ? severityBadge('ok', 'Yes') : severityBadge('critical', 'No')),
+                raw(severityBadge(c.health_status === 'Healthy' ? 'ok' : c.health_status === 'Unknown' ? '' : 'critical', c.health_status)),
                 c.uptime || '-'
             ])
         );
@@ -654,10 +672,10 @@ function renderKubernetes(k8s) {
                 compHtml += '<div style="margin-top:6px;font-weight:500;color:var(--text-bright)">etcd Members</div>';
                 compHtml += table(['Name', 'ID', 'Client URLs', 'Peer URLs'],
                     e.members.map(m => [
-                        esc(m.name),
-                        m.id === e.leader_id ? severityBadge('ok', esc(m.id) + ' (leader)') : esc(m.id),
-                        (m.client_urls || []).map(esc).join(', '),
-                        (m.peer_urls || []).map(esc).join(', ')
+                        m.name,
+                        m.id === e.leader_id ? raw(severityBadge('ok', m.id + ' (leader)')) : m.id,
+                        (m.client_urls || []).join(', '),
+                        (m.peer_urls || []).join(', ')
                     ])
                 );
             }
@@ -719,9 +737,9 @@ function renderTalos(talos) {
         html += subSection('talos-certs', 'Certificates', table(
             ['Name', 'Subject', 'Issuer', 'Not After', 'Expires In', 'Fingerprint'],
             talos.certificates.map(c => [
-                esc(c.name), esc(c.subject), esc(c.issuer), esc(c.not_after),
-                severityBadge(c.expiry_severity, (c.days_until_expiry != null ? c.days_until_expiry + 'd' : '-')),
-                `<span style="font-size:10px;color:var(--text-dim)">${esc((c.sha256_fingerprint || '').substring(0, 24))}...</span>`
+                c.name, c.subject, c.issuer, c.not_after,
+                raw(severityBadge(c.expiry_severity, (c.days_until_expiry != null ? c.days_until_expiry + 'd' : '-'))),
+                raw(`<span class="fingerprint-cell">${esc((c.sha256_fingerprint || '').substring(0, 24))}...</span>`)
             ])
         ));
     }
@@ -729,6 +747,31 @@ function renderTalos(talos) {
     html += '</div></details>';
     el.innerHTML = html;
 }
+
+// Values travel in data attributes and the handler is delegated, rather
+// than interpolated into an inline onclick. Building a JS string literal
+// inside an HTML attribute needs two different escapings at once, and any
+// value containing a quote breaks out of both.
+function logButton(containerId, label) {
+    if (!containerId) return '-';
+    return `<button class="log-btn" data-log-id="${esc(containerId)}" data-log-name="${esc(label)}">Logs</button>`;
+}
+
+document.addEventListener('click', e => {
+    const btn = e.target.closest('[data-log-id]');
+    if (btn) {
+        openLogViewer(btn.dataset.logId, btn.dataset.logName);
+        return;
+    }
+
+    const copy = e.target.closest('[data-copy]');
+    if (copy) {
+        e.preventDefault();
+        navigator.clipboard.writeText(copy.dataset.copy);
+        copy.textContent = 'Copied!';
+        setTimeout(() => { copy.textContent = 'SSH'; }, 1000);
+    }
+});
 
 // ── Containers ──
 function renderContainers(ct) {
@@ -742,11 +785,11 @@ function renderContainers(ct) {
             ['Name', 'State', 'Memory', 'Image', 'Uptime', 'Logs'],
             ct.system_containers.map(c => [
                 c.name,
-                c.state === 'CONTAINER_RUNNING' ? severityBadge('ok', 'Running') : severityBadge('critical', c.state),
+                raw(c.state === 'CONTAINER_RUNNING' ? severityBadge('ok', 'Running') : severityBadge('critical', c.state)),
                 c.stats.memory_human || '-',
-                `<span style="font-size:11px;color:var(--text-dim)">${esc((c.image || '').split('/').pop())}</span>`,
+                raw(`<span class="image-cell">${esc((c.image || '').split('/').pop())}</span>`),
                 c.uptime || '-',
-                c.container_id ? `<button class="log-btn" onclick="openLogViewer('${esc(c.container_id)}','${esc(c.name)}')">Logs</button>` : '-'
+                raw(logButton(c.container_id, c.name))
             ])
         ));
     }
@@ -759,10 +802,13 @@ function renderContainers(ct) {
                 c.namespace,
                 c.pod_name,
                 c.container_name,
-                c.state === 'CONTAINER_RUNNING' ? severityBadge('ok', 'Running') : severityBadge('critical', c.state),
+                raw(c.state === 'CONTAINER_RUNNING' ? severityBadge('ok', 'Running') : severityBadge('critical', c.state)),
                 c.stats.memory_human || '-',
                 c.uptime || '-',
-                c.container_id ? `<button class="log-btn" onclick="openLogViewer('${esc(c.container_id)}','${esc(c.namespace + '/' + c.pod_name + '/' + c.container_name)}')">Logs</button>` : '-'
+                raw(logButton(
+                    c.container_id,
+                    `${c.namespace}/${c.pod_name}/${c.container_name}`
+                ))
             ])
         ));
     }
@@ -780,12 +826,12 @@ function renderProcesses(procs) {
     html += table(
         ['PID', 'PPID', 'User', 'CPU%', 'MEM%', 'RSS', 'State', 'Command'],
         procs.processes.map(p => [
-            p.pid, p.ppid, esc(p.user),
+            p.pid, p.ppid, p.user,
             p.cpu_percent.toFixed(1),
             p.mem_percent.toFixed(1),
             humanBytes(p.rss_kb * 1024),
             p.state,
-            `<span style="font-size:11px;max-width:400px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.command)}</span>`
+            raw(`<span class="cmd-cell">${esc(p.command)}</span>`)
         ])
     );
 
