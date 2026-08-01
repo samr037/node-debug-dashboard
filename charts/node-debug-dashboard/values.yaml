@@ -34,6 +34,20 @@ auth:
 # application default of one week.
 dmesgWindowHours: ""
 
+# Restrict who can reach the dashboard. Off by default because it needs
+# CIDRs only you know, and because a policy with no rules would silently
+# black-hole a working install.
+#
+# Note this constrains pod-network traffic. With hostNetwork the listener is
+# also on the node's own address, where CNI policy does not apply — a host
+# firewall or an upstream ACL is what covers that path.
+networkPolicy:
+  enabled: false
+  # e.g. ["10.0.0.0/8", "192.168.1.0/24"]
+  allowedCIDRs: []
+  # e.g. ["monitoring", "observability"]
+  allowedNamespaces: []
+
 # SSH debug shell. Off by default. To enable, set ssh.enabled=true and
 # pass keys via ssh.authorizedKeys.
 ssh:
