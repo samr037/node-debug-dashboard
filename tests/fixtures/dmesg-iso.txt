@@ -1,0 +1,10 @@
+2026-07-28T21:06:58,163370+00:00 CPU0: Thermal monitoring enabled (TM1)
+2026-07-28T21:06:58,212925+00:00 thermal_sys: Registered thermal governor 'step_wise'
+2026-07-28T21:06:58,212925+00:00 thermal_sys: Registered thermal governor 'user_space'
+2026-07-28T21:06:58,263485+00:00 EDAC MC: Ver: 3.0.0
+2026-07-28T21:06:58,584207+00:00 thermal LNXTHERM:00: registered as thermal_zone0
+2026-07-28T21:06:58,584211+00:00 ACPI: thermal: Thermal Zone [TZ00] (28 C)
+2026-07-28T21:06:58,584393+00:00 thermal LNXTHERM:01: registered as thermal_zone1
+2026-07-28T21:06:58,584397+00:00 ACPI: thermal: Thermal Zone [TZ01] (30 C)
+2026-07-28T21:06:59,400518+00:00 EDAC ie31200: No ECC support
+2026-07-28T21:06:59,418616+00:00 e1000e 0000:00:19.0: Interrupt Throttling Rate (ints/sec) set to dynamic conservative mode

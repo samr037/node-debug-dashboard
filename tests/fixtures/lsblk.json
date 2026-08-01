@@ -1,0 +1,131 @@
+{
+   "blockdevices": [
+      {
+         "name": "loop0",
+         "size": "4K",
+         "type": "loop",
+         "mountpoint": null,
+         "fstype": null,
+         "model": null,
+         "serial": null,
+         "rota": false,
+         "tran": null
+      },{
+         "name": "loop1",
+         "size": "100K",
+         "type": "loop",
+         "mountpoint": null,
+         "fstype": null,
+         "model": null,
+         "serial": null,
+         "rota": false,
+         "tran": null
+      },{
+         "name": "loop2",
+         "size": "6.8M",
+         "type": "loop",
+         "mountpoint": null,
+         "fstype": null,
+         "model": null,
+         "serial": null,
+         "rota": false,
+         "tran": null
+      },{
+         "name": "loop3",
+         "size": "71.7M",
+         "type": "loop",
+         "mountpoint": null,
+         "fstype": null,
+         "model": null,
+         "serial": null,
+         "rota": false,
+         "tran": null
+      },{
+         "name": "sda",
+         "size": "223.6G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "PNY CS900 240GB ",
+         "serial": null,
+         "rota": false,
+         "tran": "sata",
+         "children": [
+            {
+               "name": "sda1",
+               "size": "2.1G",
+               "type": "part",
+               "mountpoint": null,
+               "fstype": null,
+               "model": null,
+               "serial": null,
+               "rota": false,
+               "tran": null
+            },{
+               "name": "sda2",
+               "size": "1M",
+               "type": "part",
+               "mountpoint": null,
+               "fstype": null,
+               "model": null,
+               "serial": null,
+               "rota": false,
+               "tran": null
+            },{
+               "name": "sda3",
+               "size": "100M",
+               "type": "part",
+               "mountpoint": null,
+               "fstype": null,
+               "model": null,
+               "serial": null,
+               "rota": false,
+               "tran": null
+            },{
+               "name": "sda4",
+               "size": "221.4G",
+               "type": "part",
+               "mountpoint": "/host/var",
+               "fstype": null,
+               "model": null,
+               "serial": null,
+               "rota": false,
+               "tran": null
+            }
+         ]
+      },{
+         "name": "sdb",
+         "size": "238.5G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "TOSHIBA THNSNJ25",
+         "serial": null,
+         "rota": false,
+         "tran": "sata",
+         "children": [
+            {
+               "name": "sdb1",
+               "size": "238.4G",
+               "type": "part",
+               "mountpoint": "/host/var/mnt/longhorn-data",
+               "fstype": null,
+               "model": null,
+               "serial": null,
+               "rota": false,
+               "tran": null
+            }
+         ]
+      },{
+         "name": "sdc",
+         "size": "100M",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "VIRTUAL-DISK    ",
+         "serial": null,
+         "rota": true,
+         "tran": "iscsi"
+      }
+   ]
+}

@@ -1,0 +1,46 @@
+# dmidecode 3.4
+Getting SMBIOS data from sysfs.
+SMBIOS 2.7 present.
+
+Handle 0x003C, DMI type 17, 34 bytes
+Memory Device
+	Array Handle: 0x003B
+	Error Information Handle: Not Provided
+	Total Width: 64 bits
+	Data Width: 64 bits
+	Size: 8 GB
+	Form Factor: DIMM
+	Set: None
+	Locator: DIMM1
+	Bank Locator: Not Specified
+	Type: DDR3
+	Type Detail: Synchronous
+	Speed: 1600 MT/s
+	Manufacturer: 859B
+	Serial Number: FDAD20FB
+	Asset Tag: 9876543210
+	Part Number: BLS8G3D1609DS1S00.
+	Rank: 2
+	Configured Memory Speed: 1600 MT/s
+
+Handle 0x003E, DMI type 17, 34 bytes
+Memory Device
+	Array Handle: 0x003B
+	Error Information Handle: Not Provided
+	Total Width: 64 bits
+	Data Width: 64 bits
+	Size: 8 GB
+	Form Factor: DIMM
+	Set: None
+	Locator: DIMM2
+	Bank Locator: Not Specified
+	Type: DDR3
+	Type Detail: Synchronous
+	Speed: 1600 MT/s
+	Manufacturer: 859B
+	Serial Number: FDAD22F9
+	Asset Tag: 9876543210
+	Part Number: BLS8G3D1609DS1S00.
+	Rank: 2
+	Configured Memory Speed: 1600 MT/s
+

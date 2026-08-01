@@ -1,0 +1,12 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error::DeprecationWarning:app.*"]
+
+[tool.ruff]
+target-version = "py311"
+
+# Pinned explicitly rather than relying on ruff's defaults, which widen
+# between releases and would otherwise turn CI red on an unrelated push.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
