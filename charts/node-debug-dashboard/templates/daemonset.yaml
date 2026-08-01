@@ -24,6 +24,10 @@ spec:
       hostNetwork: {{ .Values.hostNetwork }}
       hostPID: {{ .Values.hostPID }}
       hostIPC: {{ .Values.hostIPC }}
+      # With hostNetwork the pod inherits the node's resolv.conf, which
+      # cannot resolve kubernetes.default.svc. Without this the entire
+      # Kubernetes section and the Talos machine details come back empty.
+      dnsPolicy: {{ .Values.dnsPolicy | default (ternary "ClusterFirstWithHostNet" "ClusterFirst" .Values.hostNetwork) }}
       {{- with .Values.priorityClassName }}
       priorityClassName: {{ . }}
       {{- end }}

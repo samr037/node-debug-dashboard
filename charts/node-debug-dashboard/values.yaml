@@ -64,6 +64,10 @@ ssh:
 
 # Required for hardware, Kubernetes, and etcd diagnostics.
 hostNetwork: true
+
+# Left empty, this follows hostNetwork: ClusterFirstWithHostNet when host
+# networking is on, ClusterFirst otherwise. Only set it to override.
+dnsPolicy: ""
 hostPID: true
 hostIPC: true
 privileged: true
