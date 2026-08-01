@@ -1,6 +1,10 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# The repo root is not on sys.path when pytest is invoked directly, only
+# when it runs as `python -m pytest`. Without this, `import app` resolves
+# locally and fails in CI.
+pythonpath = ["."]
 filterwarnings = ["error::DeprecationWarning:app.*"]
 
 [tool.ruff]
