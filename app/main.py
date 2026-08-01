@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -59,5 +60,10 @@ async def health():
     return {"status": "ok"}
 
 
-# Static frontend — mount last so API routes take precedence
-app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
+# Static frontend — mount last so API routes take precedence.
+# Resolved from this file rather than the working directory: as a relative
+# path, importing the app from anywhere but the repo root raised
+# "Directory 'app/static' does not exist" at import time. The entrypoint
+# happens to cd first, so it only ever bit tests and local runs.
+STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
