@@ -51,10 +51,19 @@ class EtcdStatus(BaseModel):
     healthy: bool = False
     db_size_mb: float = 0
     db_size_in_use_mb: float = 0
+    db_size_quota_mb: float = 0
+    quota_used_percent: float = 0
+    # Space held by etcd but no longer in use. Reclaimed by a defrag; if it
+    # grows until db_size reaches the quota, etcd goes read-only.
+    defrag_reclaimable_mb: float = 0
+    defrag_severity: str = "ok"  # "ok", "warning", "critical"
+    version: str = ""
     leader_id: str = ""
     member_id: str = ""
     is_leader: bool = False
     raft_index: int = 0
+    raft_term: int = 0
+    raft_applied_index: int = 0
     members: list[dict] = []
 
 

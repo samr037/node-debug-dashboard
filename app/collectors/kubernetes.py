@@ -196,6 +196,68 @@ async def collect_k8s_certificates() -> list[CertificateInfo]:
     return certs
 
 
+def _first_int(data: dict, *keys: str) -> int:
+    """Read the first key that is present, tolerating etcd's naming.
+
+    The gRPC gateway emits camelCase for message fields but snake_case
+    inside the response header, and that has shifted between etcd releases,
+    so accept either spelling. Numeric fields arrive as JSON strings because
+    they are int64.
+    """
+    for key in keys:
+        if key in data:
+            try:
+                return int(data[key])
+            except (TypeError, ValueError):
+                continue
+    return 0
+
+
+def _parse_etcd_status(data: dict) -> EtcdStatus:
+    """Build EtcdStatus from a /v3/maintenance/status response."""
+    header = data.get("header", {})
+
+    db_size = _first_int(data, "dbSize", "db_size")
+    db_in_use = _first_int(data, "dbSizeInUse", "db_size_in_use")
+    quota = _first_int(data, "dbSizeQuota", "db_size_quota")
+
+    mb = 1048576
+    reclaimable = max(db_size - db_in_use, 0)
+    quota_pct = round(db_size / quota * 100, 1) if quota else 0.0
+
+    # etcd stops accepting writes at the quota, and only a defrag returns
+    # the free-list to the filesystem, so flag it before it gets there.
+    if quota_pct >= 80:
+        defrag_severity = "critical"
+    elif quota_pct >= 50 and reclaimable > db_in_use:
+        defrag_severity = "warning"
+    else:
+        defrag_severity = "ok"
+
+    member_id = str(_first_int(header, "member_id", "memberId") or "")
+    leader_id = str(_first_int(data, "leader") or "")
+
+    return EtcdStatus(
+        healthy=True,
+        db_size_mb=round(db_size / mb, 1),
+        db_size_in_use_mb=round(db_in_use / mb, 1),
+        db_size_quota_mb=round(quota / mb, 1),
+        quota_used_percent=quota_pct,
+        defrag_reclaimable_mb=round(reclaimable / mb, 1),
+        defrag_severity=defrag_severity,
+        version=str(data.get("version", "")),
+        member_id=member_id,
+        leader_id=leader_id,
+        is_leader=bool(member_id) and member_id == leader_id,
+        # raftIndex is top-level, not in the header. Reading header["raft_index"]
+        # silently yielded 0 on every release.
+        raft_index=_first_int(data, "raftIndex", "raft_index"),
+        raft_term=_first_int(data, "raftTerm", "raft_term")
+        or _first_int(header, "raft_term", "raftTerm"),
+        raft_applied_index=_first_int(data, "raftAppliedIndex", "raft_applied_index"),
+    )
+
+
 @ttl_cache(seconds=300)
 async def _collect_etcd_status() -> EtcdStatus:
     """Get detailed etcd metrics via the etcd API."""
@@ -224,17 +286,7 @@ async def _collect_etcd_status() -> EtcdStatus:
     status = EtcdStatus()
     if rc == 0 and stdout.strip():
         try:
-            data = json.loads(stdout)
-            header = data.get("header", {})
-            status.member_id = str(header.get("member_id", ""))
-            status.raft_index = int(header.get("raft_index", 0))
-            status.leader_id = str(data.get("leader", ""))
-            status.is_leader = status.member_id == status.leader_id
-            status.db_size_mb = round(int(data.get("dbSize", 0)) / 1048576, 1)
-            status.db_size_in_use_mb = round(
-                int(data.get("dbSizeInUse", 0)) / 1048576, 1
-            )
-            status.healthy = True
+            status = _parse_etcd_status(json.loads(stdout))
         except (json.JSONDecodeError, ValueError, KeyError):
             pass
 

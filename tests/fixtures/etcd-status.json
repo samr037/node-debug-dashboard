@@ -1,0 +1,1 @@
+{"header":{"cluster_id":"17879828434505409520", "member_id":"17150269791318438368", "revision":"92019881", "raft_term":"2891"}, "version":"3.6.8", "dbSize":"1118593024", "leader":"2747421557141187973", "raftIndex":"103678272", "raftTerm":"2891", "raftAppliedIndex":"103678272", "dbSizeInUse":"26238976", "storageVersion":"3.6.0", "dbSizeQuota":"2147483648", "downgradeInfo":{}}

@@ -1,7 +1,11 @@
 from fastapi import APIRouter
 
 from app.collectors.dmesg import collect_dmesg_warnings
-from app.collectors.kubernetes import collect_k8s_certificates, collect_k8s_node_info
+from app.collectors.kubernetes import (
+    collect_k8s_certificates,
+    collect_k8s_components,
+    collect_k8s_node_info,
+)
 from app.collectors.memory import collect_memory
 from app.collectors.network import collect_nics
 from app.collectors.sensors import collect_sensors
@@ -149,6 +153,24 @@ async def get_warnings():
                     message=f"Talos cert expires in {cert.days_until_expiry}d: {cert.name}",
                 )
             )
+
+    # etcd storage warnings (control-plane nodes only)
+    for component in await collect_k8s_components():
+        etcd = component.etcd_status
+        if etcd is None or etcd.defrag_severity == "ok":
+            continue
+        warnings.append(
+            Warning(
+                severity=etcd.defrag_severity,
+                source="etcd",
+                message=(
+                    f"etcd at {etcd.quota_used_percent}% of its "
+                    f"{etcd.db_size_quota_mb:.0f}MB quota with only "
+                    f"{etcd.db_size_in_use_mb:.0f}MB in use — "
+                    f"{etcd.defrag_reclaimable_mb:.0f}MB reclaimable by defrag"
+                ),
+            )
+        )
 
     # K8s node condition warnings
     k8s_node = await collect_k8s_node_info()
