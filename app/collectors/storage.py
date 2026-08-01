@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 
@@ -15,9 +16,9 @@ from app.models.storage import (
 
 @ttl_cache(seconds=300)
 async def collect_storage() -> StorageOverview:
-    disks = await collect_disks()
-    smart = await collect_all_smart()
-    usage = await collect_disk_usage()
+    disks, smart, usage = await asyncio.gather(
+        collect_disks(), collect_all_smart(), collect_disk_usage()
+    )
     return StorageOverview(disks=disks, smart=smart, usage=usage)
 
 
@@ -196,12 +197,12 @@ def smart_candidates(disks: list[DiskInfo]) -> list[str]:
 
 @ttl_cache(seconds=300)
 async def collect_all_smart() -> list[SmartHealth]:
-    results: list[SmartHealth] = []
-    for dev in smart_candidates(await collect_disks()):
-        smart = await collect_smart_for_device(dev)
-        if smart:
-            results.append(smart)
-    return results
+    # smartctl can block for seconds on a sick drive, and the timeout is 15s
+    # each. Queried in series, a node with several disks could spend longer
+    # in this one collector than the whole request budget.
+    devices = smart_candidates(await collect_disks())
+    results = await asyncio.gather(*(collect_smart_for_device(d) for d in devices))
+    return [r for r in results if r]
 
 
 @ttl_cache(seconds=300)

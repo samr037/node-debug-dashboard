@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter
 
 from app.collectors.containers import collect_containers
@@ -22,22 +24,44 @@ router = APIRouter(tags=["overview"])
 @router.get("/overview")
 async def get_overview():
     """Full node overview — all sections aggregated. Primary endpoint for the dashboard."""
-    node = await collect_node_info()
-    cpu = await collect_cpu()
-    memory = await collect_memory()
-    pci = await collect_pci()
-    usb = await collect_usb()
-    nics = await collect_nics()
-    sensors = await collect_sensors()
-    gpus = await collect_gpus()
-    storage = await collect_storage()
-    efi = await collect_efi()
-    connectivity = await collect_connectivity()
-    k8s = await collect_kubernetes()
-    talos_info = await collect_talos()
-    containers_info = await collect_containers()
-    processes_info = await collect_processes()
-    warnings = await get_warnings()
+    # Collectors are independent and each spends its time waiting on
+    # subprocesses or sockets, so running them one after another meant this
+    # endpoint took as long as all of them added together.
+    (
+        node,
+        cpu,
+        memory,
+        pci,
+        usb,
+        nics,
+        sensors,
+        gpus,
+        storage,
+        efi,
+        connectivity,
+        k8s,
+        talos_info,
+        containers_info,
+        processes_info,
+        warnings,
+    ) = await asyncio.gather(
+        collect_node_info(),
+        collect_cpu(),
+        collect_memory(),
+        collect_pci(),
+        collect_usb(),
+        collect_nics(),
+        collect_sensors(),
+        collect_gpus(),
+        collect_storage(),
+        collect_efi(),
+        collect_connectivity(),
+        collect_kubernetes(),
+        collect_talos(),
+        collect_containers(),
+        collect_processes(),
+        get_warnings(),
+    )
 
     return {
         "node": node.model_dump(),

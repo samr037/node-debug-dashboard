@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, HTTPException
 
 from app.collectors.containers import collect_containers
@@ -20,13 +22,15 @@ router = APIRouter(tags=["sections"])
 
 
 async def _collect_hardware() -> dict:
-    cpu = await collect_cpu()
-    memory = await collect_memory()
-    pci = await collect_pci()
-    usb = await collect_usb()
-    nics = await collect_nics()
-    sensors = await collect_sensors()
-    gpus = await collect_gpus()
+    cpu, memory, pci, usb, nics, sensors, gpus = await asyncio.gather(
+        collect_cpu(),
+        collect_memory(),
+        collect_pci(),
+        collect_usb(),
+        collect_nics(),
+        collect_sensors(),
+        collect_gpus(),
+    )
     return {
         "cpu": cpu.model_dump(),
         "memory": memory.model_dump(),
@@ -61,8 +65,9 @@ async def get_section(section_name: str):
         return {"efi": efi.model_dump()}
 
     if section_name == "network":
-        nics = await collect_nics()
-        connectivity = await collect_connectivity()
+        nics, connectivity = await asyncio.gather(
+            collect_nics(), collect_connectivity()
+        )
         return {
             "interfaces": [n.model_dump() for n in nics],
             "connectivity": connectivity,

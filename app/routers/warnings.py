@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter
 
 from app.collectors.dmesg import collect_dmesg_warnings
@@ -21,11 +23,37 @@ async def get_warnings():
     """Aggregated warnings from all subsystems."""
     warnings: list[Warning] = []
 
+    # Every source is independent, so gather them rather than paying for
+    # each one in turn — this endpoint touches nine collectors.
+    (
+        dmesg_warnings,
+        smart_reports,
+        sensor_readings,
+        mem,
+        nics,
+        disk_usage,
+        k8s_certs,
+        talos_certs,
+        components,
+        k8s_node,
+    ) = await asyncio.gather(
+        collect_dmesg_warnings(),
+        collect_all_smart(),
+        collect_sensors(),
+        collect_memory(),
+        collect_nics(),
+        collect_disk_usage(),
+        collect_k8s_certificates(),
+        collect_talos_certificates(),
+        collect_k8s_components(),
+        collect_k8s_node_info(),
+    )
+
     # Dmesg warnings (MCE, EDAC, CPU, I/O)
-    warnings.extend(await collect_dmesg_warnings())
+    warnings.extend(dmesg_warnings)
 
     # SMART warnings
-    for smart in await collect_all_smart():
+    for smart in smart_reports:
         # Only an explicit False is a failure. None means the drive never
         # reported, which is not the same thing and must not page anyone.
         if smart.health_passed is False:
@@ -67,7 +95,7 @@ async def get_warnings():
             )
 
     # Sensor warnings (temperatures)
-    for sensor in await collect_sensors():
+    for sensor in sensor_readings:
         if sensor.is_alarm:
             sev = (
                 "critical"
@@ -83,7 +111,6 @@ async def get_warnings():
             )
 
     # Memory warnings
-    mem = await collect_memory()
     if mem.ecc_uncorrectable_errors > 0:
         warnings.append(
             Warning(
@@ -102,7 +129,7 @@ async def get_warnings():
         )
 
     # Network warnings
-    for nic in await collect_nics():
+    for nic in nics:
         if nic.rx_crc_errors > 0:
             warnings.append(
                 Warning(
@@ -123,7 +150,7 @@ async def get_warnings():
             )
 
     # Disk usage warnings
-    for usage in await collect_disk_usage():
+    for usage in disk_usage:
         if usage.severity != "ok":
             warnings.append(
                 Warning(
@@ -135,7 +162,7 @@ async def get_warnings():
             )
 
     # Certificate expiry warnings (K8s)
-    for cert in await collect_k8s_certificates():
+    for cert in k8s_certs:
         if cert.expiry_severity != "ok":
             warnings.append(
                 Warning(
@@ -146,7 +173,7 @@ async def get_warnings():
             )
 
     # Certificate expiry warnings (Talos)
-    for cert in await collect_talos_certificates():
+    for cert in talos_certs:
         if cert.expiry_severity != "ok":
             warnings.append(
                 Warning(
@@ -157,7 +184,7 @@ async def get_warnings():
             )
 
     # etcd storage warnings (control-plane nodes only)
-    for component in await collect_k8s_components():
+    for component in components:
         etcd = component.etcd_status
         if etcd is None or etcd.defrag_severity == "ok":
             continue
@@ -175,7 +202,6 @@ async def get_warnings():
         )
 
     # K8s node condition warnings
-    k8s_node = await collect_k8s_node_info()
     for cond in k8s_node.conditions:
         if cond.type == "Ready" and cond.status != "True":
             warnings.append(

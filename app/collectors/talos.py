@@ -1,3 +1,4 @@
+import asyncio
 import glob as g
 import json
 import os
@@ -230,9 +231,11 @@ async def collect_talos_certificates() -> list[TalosCertificateInfo]:
 
 @ttl_cache(seconds=300)
 async def collect_talos() -> TalosOverview:
-    version = await collect_talos_version()
-    machine_config = await collect_talos_machine_config()
-    certificates = await collect_talos_certificates()
+    version, machine_config, certificates = await asyncio.gather(
+        collect_talos_version(),
+        collect_talos_machine_config(),
+        collect_talos_certificates(),
+    )
     return TalosOverview(
         version=version,
         machine_config=machine_config,

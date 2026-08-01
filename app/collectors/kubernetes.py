@@ -441,12 +441,25 @@ async def collect_cluster_nodes() -> list[ClusterNode]:
 @ttl_cache()
 async def collect_kubernetes() -> KubernetesOverview:
     """Aggregate all Kubernetes collectors into a single overview."""
+    (
+        node_info,
+        certificates,
+        api_endpoint,
+        components,
+        cluster_nodes,
+    ) = await asyncio.gather(
+        collect_k8s_node_info(),
+        collect_k8s_certificates(),
+        collect_k8s_api_endpoint(),
+        collect_k8s_components(),
+        collect_cluster_nodes(),
+    )
     return KubernetesOverview(
-        node_info=await collect_k8s_node_info(),
-        certificates=await collect_k8s_certificates(),
-        api_endpoint=await collect_k8s_api_endpoint(),
-        components=await collect_k8s_components(),
-        cluster_nodes=await collect_cluster_nodes(),
+        node_info=node_info,
+        certificates=certificates,
+        api_endpoint=api_endpoint,
+        components=components,
+        cluster_nodes=cluster_nodes,
         ssh_info=SSHInfo(
             enabled=SSH_ENABLED,
             port=SSH_PORT,

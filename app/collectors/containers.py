@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 
@@ -199,7 +200,10 @@ async def collect_workload_containers() -> list[WorkloadContainer]:
 
 @ttl_cache()
 async def collect_containers() -> ContainersOverview:
+    system, workloads = await asyncio.gather(
+        collect_system_containers(), collect_workload_containers()
+    )
     return ContainersOverview(
-        system_containers=await collect_system_containers(),
-        workload_containers=await collect_workload_containers(),
+        system_containers=system,
+        workload_containers=workloads,
     )
