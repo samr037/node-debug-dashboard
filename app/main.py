@@ -1,6 +1,9 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from app.httpclient import close_clients
 from app.routers import (
     containers,
     hardware,
@@ -16,10 +19,18 @@ from app.routers import (
     warnings,
 )
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    await close_clients()
+
+
 app = FastAPI(
     title="Node Debug Dashboard",
     description="Hardware monitoring and diagnostics API for Talos Linux Kubernetes nodes",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 # API routers

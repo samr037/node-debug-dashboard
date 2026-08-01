@@ -15,6 +15,21 @@ from app.models.talos import (
 
 
 @ttl_cache(seconds=300)
+async def _node_object() -> dict | None:
+    """This node's object from the API server.
+
+    Both collectors below want a couple of fields off it, and each used to
+    fetch it separately.
+    """
+    from app.collectors.kubernetes import _k8s_get
+
+    node_name = os.environ.get("KUBERNETES_NODE_NAME", "")
+    if not node_name:
+        return None
+    return await _k8s_get(f"/api/v1/nodes/{node_name}")
+
+
+@ttl_cache(seconds=300)
 async def collect_talos_version() -> TalosVersionInfo:
     # Read from os-release (always available on Talos)
     os_release = await read_file(f"{HOST_ROOT}/etc/os-release")
@@ -26,30 +41,10 @@ async def collect_talos_version() -> TalosVersionInfo:
 
     # Schematic from node annotation (via K8s API)
     schematic_id = ""
-    token = (
-        await read_file("/var/run/secrets/kubernetes.io/serviceaccount/token")
-    ).strip()
-    node_name = os.environ.get("KUBERNETES_NODE_NAME", "")
-    if token and node_name:
-        ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-        stdout, _, rc = await run_command(
-            [
-                "curl",
-                "-s",
-                "--cacert",
-                ca_path,
-                "-H",
-                f"Authorization: Bearer {token}",
-                f"https://kubernetes.default.svc/api/v1/nodes/{node_name}",
-            ]
-        )
-        if rc == 0 and stdout.strip():
-            try:
-                data = json.loads(stdout)
-                annotations = data.get("metadata", {}).get("annotations", {})
-                schematic_id = annotations.get("extensions.talos.dev/schematic", "")
-            except (json.JSONDecodeError, KeyError):
-                pass
+    node = await _node_object()
+    if node:
+        annotations = node.get("metadata", {}).get("annotations", {})
+        schematic_id = annotations.get("extensions.talos.dev/schematic", "")
 
     return TalosVersionInfo(version=version, schematic_id=schematic_id)
 
@@ -68,40 +63,18 @@ async def collect_talos_machine_config() -> TalosMachineConfig:
     cluster_name = ""
     cluster_endpoint = ""
 
-    token = (
-        await read_file("/var/run/secrets/kubernetes.io/serviceaccount/token")
-    ).strip()
-    node_name = os.environ.get("KUBERNETES_NODE_NAME", "")
+    node = await _node_object()
+    if node:
+        labels = node.get("metadata", {}).get("labels", {})
 
-    if token and node_name:
-        ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-        stdout, _, rc = await run_command(
-            [
-                "curl",
-                "-s",
-                "--cacert",
-                ca_path,
-                "-H",
-                f"Authorization: Bearer {token}",
-                f"https://kubernetes.default.svc/api/v1/nodes/{node_name}",
-            ]
-        )
-        if rc == 0 and stdout.strip():
-            try:
-                data = json.loads(stdout)
-                labels = data.get("metadata", {}).get("labels", {})
+        if "node-role.kubernetes.io/control-plane" in labels:
+            machine_type = "controlplane"
 
-                if "node-role.kubernetes.io/control-plane" in labels:
-                    machine_type = "controlplane"
-
-                # Extract extension versions from labels
-                for key, val in labels.items():
-                    if key.startswith("extensions.talos.dev/"):
-                        ext_name = key.replace("extensions.talos.dev/", "")
-                        extensions.append(f"{ext_name}:{val}")
-
-            except (json.JSONDecodeError, KeyError):
-                pass
+        # Extract extension versions from labels
+        for key, val in labels.items():
+            if key.startswith("extensions.talos.dev/"):
+                ext_name = key.replace("extensions.talos.dev/", "")
+                extensions.append(f"{ext_name}:{val}")
 
     # Get install disk from lsblk (find the Talos boot disk)
     install_disk = ""

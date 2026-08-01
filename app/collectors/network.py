@@ -1,8 +1,11 @@
 import json
 import os
 
+import httpx
+
 from app.collectors.base import read_file, run_command, ttl_cache
 from app.config import HOST_ROOT
+from app.httpclient import insecure_client, public_client
 from app.models.hardware import NICInfo
 
 
@@ -112,40 +115,26 @@ async def collect_connectivity() -> dict:
 
     # Internet
     internet_ok = False
-    stdout, _, rc = await run_command(
-        [
-            "curl",
-            "-sSI",
-            "--max-time",
-            "5",
-            "--connect-timeout",
-            "5",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}",
-            "https://www.google.com",
-        ]
-    )
-    if rc == 0 and stdout.strip().startswith(("2", "3")):
-        internet_ok = True
+    try:
+        response = await public_client().head(
+            "https://www.google.com", timeout=5, follow_redirects=False
+        )
+        internet_ok = 200 <= response.status_code < 400
+    except httpx.HTTPError:
+        internet_ok = False
 
     # K8s API
     k8s_ok = False
     k8s_host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
     k8s_port = os.environ.get("KUBERNETES_SERVICE_PORT", "")
     if k8s_host:
-        stdout, _, rc = await run_command(
-            [
-                "curl",
-                "-sk",
-                "--max-time",
-                "5",
-                f"https://{k8s_host}:{k8s_port}/healthz",
-            ]
-        )
-        if "ok" in stdout:
-            k8s_ok = True
+        try:
+            response = await insecure_client().get(
+                f"https://{k8s_host}:{k8s_port}/healthz", timeout=5
+            )
+            k8s_ok = "ok" in response.text
+        except httpx.HTTPError:
+            k8s_ok = False
 
     # Default gateway
     stdout, _, rc = await run_command(["ip", "route", "show", "default"])

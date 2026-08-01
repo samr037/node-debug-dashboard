@@ -1,10 +1,19 @@
+import asyncio
 import glob
-import json
 import os
 from datetime import datetime, timezone
 
-from app.collectors.base import read_file, run_command, ttl_cache
+import httpx
+
+from app.collectors.base import run_command, ttl_cache
 from app.config import HOST_ROOT, SSH_ENABLED, SSH_PASSWORD_AUTH, SSH_PORT
+from app.httpclient import (
+    bearer,
+    etcd_client,
+    insecure_client,
+    kubernetes_client,
+    read_service_account_token,
+)
 from app.models.kubernetes import (
     CertificateInfo,
     ClusterNode,
@@ -31,37 +40,32 @@ def _parse_resources(data: dict) -> K8sNodeResources:
     )
 
 
+async def _k8s_get(path: str, params: dict | None = None) -> dict | None:
+    """GET a path on the API server using the service account credentials."""
+    token = await read_service_account_token()
+    if not token:
+        return None
+    try:
+        response = await kubernetes_client().get(
+            f"https://kubernetes.default.svc{path}",
+            headers=bearer(token),
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
 @ttl_cache(seconds=60)
 async def collect_k8s_node_info() -> K8sNodeInfo:
     """Query the Kubernetes API for this node's info using the service account."""
-    token = await read_file("/var/run/secrets/kubernetes.io/serviceaccount/token")
     node_name = os.environ.get("KUBERNETES_NODE_NAME", "")
-
-    if not token or not node_name:
+    if not node_name:
         return K8sNodeInfo()
 
-    token = token.strip()
-    ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-    url = f"https://kubernetes.default.svc/api/v1/nodes/{node_name}"
-
-    stdout, _, rc = await run_command(
-        [
-            "curl",
-            "-s",
-            "--cacert",
-            ca_path,
-            "-H",
-            f"Authorization: Bearer {token}",
-            url,
-        ]
-    )
-
-    if rc != 0 or not stdout.strip():
-        return K8sNodeInfo()
-
-    try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError:
+    data = await _k8s_get(f"/api/v1/nodes/{node_name}")
+    if data is None:
         return K8sNodeInfo()
 
     metadata = data.get("metadata", {})
@@ -258,57 +262,46 @@ def _parse_etcd_status(data: dict) -> EtcdStatus:
     )
 
 
+async def _etcd_post(path: str) -> dict | None:
+    """POST an empty body to an etcd v3 gateway endpoint."""
+    client = etcd_client()
+    if client is None:
+        return None
+    try:
+        response = await client.post(
+            f"https://localhost:2379{path}", json={}, timeout=3
+        )
+        response.raise_for_status()
+        return response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
 @ttl_cache(seconds=300)
 async def _collect_etcd_status() -> EtcdStatus:
     """Get detailed etcd metrics via the etcd API."""
-    # Talos stores etcd certs in /system/secrets/etcd/
-    ca = f"{HOST_ROOT}/system/secrets/etcd/ca.crt"
-    cert = f"{HOST_ROOT}/system/secrets/etcd/admin.crt"
-    key = f"{HOST_ROOT}/system/secrets/etcd/admin.key"
-    base_curl = [
-        "curl",
-        "-s",
-        "--max-time",
-        "3",
-        "--cacert",
-        ca,
-        "--cert",
-        cert,
-        "--key",
-        key,
-    ]
-
-    # Get status (db size, leader, raft index)
-    stdout, _, rc = await run_command(
-        base_curl
-        + ["https://localhost:2379/v3/maintenance/status", "-X", "POST", "-d", "{}"]
+    status_data, members_data = await asyncio.gather(
+        _etcd_post("/v3/maintenance/status"),
+        _etcd_post("/v3/cluster/member/list"),
     )
+
     status = EtcdStatus()
-    if rc == 0 and stdout.strip():
+    if status_data:
         try:
-            status = _parse_etcd_status(json.loads(stdout))
-        except (json.JSONDecodeError, ValueError, KeyError):
+            status = _parse_etcd_status(status_data)
+        except (ValueError, KeyError):
             pass
 
-    # Get member list
-    stdout, _, rc = await run_command(
-        base_curl
-        + ["https://localhost:2379/v3/cluster/member/list", "-X", "POST", "-d", "{}"]
-    )
-    if rc == 0 and stdout.strip():
-        try:
-            data = json.loads(stdout)
-            for m in data.get("members", []):
-                status.members.append(
-                    {
-                        "id": str(m.get("ID", "")),
-                        "name": m.get("name", ""),
-                        "peer_urls": m.get("peerURLs", []),
-                        "client_urls": m.get("clientURLs", []),
-                    }
-                )
-        except (json.JSONDecodeError, KeyError):
-            pass
+    if members_data:
+        for m in members_data.get("members", []):
+            status.members.append(
+                {
+                    "id": str(m.get("ID", "")),
+                    "name": m.get("name", ""),
+                    "peer_urls": m.get("peerURLs", []),
+                    "client_urls": m.get("clientURLs", []),
+                }
+            )
 
     return status
 
@@ -325,53 +318,35 @@ async def collect_k8s_components() -> list[K8sComponentStatus]:
         "kube-proxy": "http://localhost:10249/healthz",
     }
 
-    # etcd needs client certs on Talos
-    etcd_ca = f"{HOST_ROOT}/system/secrets/etcd/ca.crt"
-    etcd_cert = f"{HOST_ROOT}/system/secrets/etcd/admin.crt"
-    etcd_key = f"{HOST_ROOT}/system/secrets/etcd/admin.key"
+    async def probe(name: str, url: str) -> K8sComponentStatus:
+        # etcd needs client certs on Talos; the rest serve self-signed certs
+        # on localhost, so verification is off either way.
+        client = etcd_client() if name == "etcd" else insecure_client()
+        body = ""
+        if client is not None:
+            try:
+                response = await client.get(url, timeout=2)
+                body = response.text
+            except httpx.HTTPError:
+                body = ""
 
-    results: list[K8sComponentStatus] = []
-    for name, url in components.items():
-        if name == "etcd":
-            cmd = [
-                "curl",
-                "-s",
-                "--max-time",
-                "2",
-                "--cacert",
-                etcd_ca,
-                "--cert",
-                etcd_cert,
-                "--key",
-                etcd_key,
-                url,
-            ]
+        if not body.strip():
+            health_status, running = "Unknown", False
+        elif "ok" in body.lower() or '"health":"true"' in body.lower():
+            health_status, running = "Healthy", True
         else:
-            cmd = ["curl", "-sk", "--max-time", "2", url]
-        stdout, _, rc = await run_command(cmd)
+            health_status, running = "Unhealthy", False
 
-        if rc != 0 or not stdout.strip():
-            health_status = "Unknown"
-            running = False
-        elif "ok" in stdout.lower() or '"health":"true"' in stdout.lower():
-            health_status = "Healthy"
-            running = True
-        else:
-            health_status = "Unhealthy"
-            running = False
-
-        etcd_status = None
-        if name == "etcd" and running:
-            etcd_status = await _collect_etcd_status()
-
-        results.append(
-            K8sComponentStatus(
-                name=name,
-                running=running,
-                health_status=health_status,
-                etcd_status=etcd_status,
-            )
+        return K8sComponentStatus(
+            name=name,
+            running=running,
+            health_status=health_status,
+            etcd_status=(
+                await _collect_etcd_status() if name == "etcd" and running else None
+            ),
         )
+
+    results = list(await asyncio.gather(*(probe(n, u) for n, u in components.items())))
 
     return results
 
@@ -385,21 +360,17 @@ async def collect_k8s_api_endpoint() -> K8sApiEndpoint:
     if not host:
         return K8sApiEndpoint()
 
-    token = (
-        await read_file("/var/run/secrets/kubernetes.io/serviceaccount/token")
-    ).strip()
-    ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-    url = f"https://{host}:{port}/healthz"
+    token = await read_service_account_token()
+    client = kubernetes_client() if token else insecure_client()
 
-    cmd = ["curl", "-s", "--max-time", "2", "--cacert", ca_path]
-    if token:
-        cmd.extend(["-H", f"Authorization: Bearer {token}"])
-    else:
-        cmd.append("-k")
-    cmd.append(url)
-
-    stdout, _, rc = await run_command(cmd)
-    healthy = rc == 0 and "ok" in stdout.lower()
+    healthy = False
+    try:
+        response = await client.get(
+            f"https://{host}:{port}/healthz", headers=bearer(token), timeout=2
+        )
+        healthy = "ok" in response.text.lower()
+    except httpx.HTTPError:
+        healthy = False
 
     return K8sApiEndpoint(
         url=f"https://{host}:{port}",
@@ -410,30 +381,11 @@ async def collect_k8s_api_endpoint() -> K8sApiEndpoint:
 @ttl_cache(seconds=60)
 async def collect_cluster_nodes() -> list[ClusterNode]:
     """List all nodes in the cluster with name, IP, role, and readiness."""
-    token = (
-        await read_file("/var/run/secrets/kubernetes.io/serviceaccount/token")
-    ).strip()
-    if not token:
-        return []
-
-    ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-    stdout, _, rc = await run_command(
-        [
-            "curl",
-            "-s",
-            "--cacert",
-            ca_path,
-            "-H",
-            f"Authorization: Bearer {token}",
-            "https://kubernetes.default.svc/api/v1/nodes",
-        ]
-    )
-    if rc != 0 or not stdout.strip():
-        return []
-
-    try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError:
+    # resourceVersion=0 is served from the API server's watch cache, so
+    # listing every node each minute from every node does not turn into a
+    # quorum read against etcd.
+    data = await _k8s_get("/api/v1/nodes", params={"resourceVersion": "0"})
+    if data is None:
         return []
 
     current_node = os.environ.get("KUBERNETES_NODE_NAME", "")
