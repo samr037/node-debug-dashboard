@@ -1,11 +1,16 @@
 import os
 import re
+import time
 
 from app.collectors.base import ttl_cache
 from app.config import HOST_PROC
 from app.models.processes import ProcessesOverview, ProcessInfo
 
 _CLK_TCK = os.sysconf("SC_CLK_TCK")
+
+# CPU tick counters from the previous collection, keyed on (pid, starttime).
+# Replaced wholesale on each pass, so it cannot grow past the live process count.
+_prev_samples: dict[tuple[int, int], tuple[int, float]] = {}
 
 # State code to human-readable mapping
 _STATE_MAP = {
@@ -54,8 +59,47 @@ def _read_file_sync(path: str) -> str:
         return ""
 
 
+def _cpu_percent(
+    pid: int,
+    starttime: int,
+    cpu_ticks: int,
+    uptime_secs: float,
+    now: float,
+    prev_samples: dict[tuple[int, int], tuple[int, float]],
+) -> float:
+    """CPU usage for one process, as a percentage of one core.
+
+    Prefers the delta against the previous collection, which is what an
+    operator actually wants: how busy is this process *now*. Falls back to
+    an average over the process's own lifetime the first time we see a PID.
+
+    The previous sample is keyed on (pid, starttime) so a recycled PID is
+    treated as a new process rather than producing a nonsense delta.
+    """
+    if _CLK_TCK <= 0:
+        return 0.0
+
+    prev = prev_samples.get((pid, starttime))
+    if prev is not None:
+        prev_ticks, prev_time = prev
+        elapsed = now - prev_time
+        # Counters are monotonic; a negative delta means we misread something.
+        if elapsed > 0 and cpu_ticks >= prev_ticks:
+            return round((cpu_ticks - prev_ticks) / _CLK_TCK / elapsed * 100, 2)
+
+    # First sighting: average over how long this process has actually been
+    # alive, not over system uptime — dividing by uptime makes every process
+    # started after boot look idle.
+    age_secs = uptime_secs - (starttime / _CLK_TCK)
+    if age_secs <= 0:
+        return 0.0
+    return round(cpu_ticks / _CLK_TCK / age_secs * 100, 2)
+
+
 def _collect_processes_sync() -> ProcessesOverview:
     """Synchronous process collection — runs in executor."""
+    global _prev_samples
+
     proc_root = HOST_PROC
 
     # System uptime
@@ -63,6 +107,13 @@ def _collect_processes_sync() -> ProcessesOverview:
     if not uptime_raw:
         return ProcessesOverview()
     uptime_secs = float(uptime_raw.split()[0])
+
+    # CPU deltas are measured against the previous collection. Building a
+    # fresh dict each pass drops processes that have exited, so this stays
+    # bounded by the live process count.
+    prev_samples = _prev_samples
+    samples: dict[tuple[int, int], tuple[int, float]] = {}
+    now = time.monotonic()
 
     # Total memory from meminfo
     meminfo = _read_file_sync(f"{proc_root}/meminfo")
@@ -97,18 +148,20 @@ def _collect_processes_sync() -> ProcessesOverview:
             if paren_end == -1:
                 continue
             after_comm = stat_raw[paren_end + 2 :].split()
-            if len(after_comm) < 13:
+            if len(after_comm) < 20:
                 continue
 
             state_char = after_comm[0]
             ppid = int(after_comm[1])
             utime = int(after_comm[11])
             stime = int(after_comm[12])
+            starttime = int(after_comm[19])
 
-            # CPU percent: (utime + stime) / (uptime * CLK_TCK) * 100
-            cpu_percent = 0.0
-            if uptime_secs > 0 and _CLK_TCK > 0:
-                cpu_percent = round((utime + stime) / (uptime_secs * _CLK_TCK) * 100, 2)
+            cpu_ticks = utime + stime
+            cpu_percent = _cpu_percent(
+                pid, starttime, cpu_ticks, uptime_secs, now, prev_samples
+            )
+            samples[(pid, starttime)] = (cpu_ticks, now)
 
             # Parse /proc/<pid>/status for VmRSS, VmSize, Uid
             status_raw = _read_file_sync(f"{pid_dir}/status")
@@ -170,6 +223,8 @@ def _collect_processes_sync() -> ProcessesOverview:
         except (ValueError, IndexError, OSError):
             # Process disappeared mid-read or parsing error — skip it
             continue
+
+    _prev_samples = samples
 
     # Sort by memory percent descending, limit to top 200
     processes.sort(key=lambda p: p.mem_percent, reverse=True)
