@@ -2,13 +2,14 @@ import glob
 import re
 
 from app.collectors.base import read_file, run_command, ttl_cache
+from app.config import HOST_PROC, HOST_SYS
 from app.models.hardware import DimmInfo, MemoryInfo
 
 
 @ttl_cache()
 async def collect_memory() -> MemoryInfo:
     # /proc/meminfo
-    meminfo = await read_file("/proc/meminfo")
+    meminfo = await read_file(f"{HOST_PROC}/meminfo")
     total_kb = available_kb = 0
     for line in meminfo.splitlines():
         if line.startswith("MemTotal:"):
@@ -102,11 +103,11 @@ def _dimm_from_dict(d: dict[str, str]) -> DimmInfo:
 async def _collect_edac() -> tuple[int, int]:
     ce_total = 0
     ue_total = 0
-    for ce_file in glob.glob("/sys/devices/system/edac/mc/mc*/ce_count"):
+    for ce_file in glob.glob(f"{HOST_SYS}/devices/system/edac/mc/mc*/ce_count"):
         val = (await read_file(ce_file)).strip()
         if val.isdigit():
             ce_total += int(val)
-    for ue_file in glob.glob("/sys/devices/system/edac/mc/mc*/ue_count"):
+    for ue_file in glob.glob(f"{HOST_SYS}/devices/system/edac/mc/mc*/ue_count"):
         val = (await read_file(ue_file)).strip()
         if val.isdigit():
             ue_total += int(val)

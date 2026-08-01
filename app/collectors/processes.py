@@ -3,7 +3,7 @@ import re
 import time
 
 from app.collectors.base import ttl_cache
-from app.config import HOST_PROC
+from app.config import HOST_PROC, HOST_ROOT
 from app.models.processes import ProcessesOverview, ProcessInfo
 
 _CLK_TCK = os.sysconf("SC_CLK_TCK")
@@ -126,7 +126,7 @@ def _collect_processes_sync() -> ProcessesOverview:
             break
 
     # UID -> username mapping (Talos has no passwd, so this may be empty)
-    passwd_content = _read_file_sync("/host/etc/passwd")
+    passwd_content = _read_file_sync(f"{HOST_ROOT}/etc/passwd")
     uid_map = _parse_uid_map(passwd_content)
 
     # Enumerate PIDs

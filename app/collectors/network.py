@@ -4,7 +4,7 @@ import os
 import httpx
 
 from app.collectors.base import read_file, run_command, ttl_cache
-from app.config import HOST_ROOT
+from app.config import HOST_ROOT, HOST_SYS
 from app.httpclient import (
     bearer,
     insecure_client,
@@ -20,7 +20,7 @@ async def collect_nics() -> list[NICInfo]:
     skip_prefixes = ("lo", "veth", "cali", "lxc", "cni", "flannel", "docker", "br-")
 
     try:
-        ifaces = os.listdir("/sys/class/net/")
+        ifaces = os.listdir(f"{HOST_SYS}/class/net/")
     except OSError:
         return []
 
@@ -29,18 +29,18 @@ async def collect_nics() -> list[NICInfo]:
             continue
 
         # MAC
-        mac = (await read_file(f"/sys/class/net/{name}/address")).strip()
+        mac = (await read_file(f"{HOST_SYS}/class/net/{name}/address")).strip()
 
         # Driver
         driver = ""
-        driver_link = f"/sys/class/net/{name}/device/driver"
+        driver_link = f"{HOST_SYS}/class/net/{name}/device/driver"
         try:
             driver = os.path.basename(os.readlink(driver_link))
         except OSError:
             pass
 
         # Stats
-        stats_dir = f"/sys/class/net/{name}/statistics"
+        stats_dir = f"{HOST_SYS}/class/net/{name}/statistics"
         rx_errors = int((await read_file(f"{stats_dir}/rx_errors")).strip() or "0")
         tx_errors = int((await read_file(f"{stats_dir}/tx_errors")).strip() or "0")
         rx_dropped = int((await read_file(f"{stats_dir}/rx_dropped")).strip() or "0")

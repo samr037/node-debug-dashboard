@@ -1,8 +1,6 @@
 from app.collectors.base import run_command, ttl_cache
 from app.models.hardware import GPUInfo
 
-HOST_PROC = "/host-proc"
-
 
 @ttl_cache()
 async def collect_gpus() -> list[GPUInfo]:

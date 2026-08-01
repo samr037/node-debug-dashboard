@@ -1,4 +1,5 @@
 from app.collectors.base import read_file, run_command, ttl_cache
+from app.config import HOST_PROC
 from app.models.hardware import CPUInfo
 
 
@@ -13,7 +14,7 @@ async def collect_cpu() -> CPUInfo:
             fields[key.strip()] = val.strip()
 
     # Flags from /proc/cpuinfo
-    cpuinfo = await read_file("/proc/cpuinfo")
+    cpuinfo = await read_file(f"{HOST_PROC}/cpuinfo")
     flags: list[str] = []
     for line in cpuinfo.splitlines():
         if line.startswith("flags"):

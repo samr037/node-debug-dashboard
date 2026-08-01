@@ -2,6 +2,10 @@ import os
 
 HOST_ROOT = os.environ.get("HOST_ROOT", "/host")
 HOST_PROC = os.environ.get("HOST_PROC", "/host-proc")
+# The container's own /sys already resolves to the host's when privileged,
+# so this is the host view in practice. Named so collectors can say which
+# view they mean, and so it can be pointed elsewhere for testing.
+HOST_SYS = os.environ.get("HOST_SYS", "/sys")
 CACHE_TTL = int(os.environ.get("CACHE_TTL", "10"))
 COMMAND_TIMEOUT = float(os.environ.get("COMMAND_TIMEOUT", "10"))
 

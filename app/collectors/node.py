@@ -2,7 +2,7 @@ import os
 import re
 
 from app.collectors.base import read_file, run_command, ttl_cache
-from app.config import HOST_ROOT
+from app.config import HOST_PROC, HOST_ROOT
 from app.models.node import IPAddress, NodeInfo
 
 
@@ -44,7 +44,7 @@ async def collect_node_info() -> NodeInfo:
     cpu_cores = cpu_sockets * cpu_cores_per
 
     # RAM
-    meminfo = await read_file("/proc/meminfo")
+    meminfo = await read_file(f"{HOST_PROC}/meminfo")
     ram_kb = 0
     for line in meminfo.splitlines():
         if line.startswith("MemTotal:"):
@@ -53,7 +53,7 @@ async def collect_node_info() -> NodeInfo:
     ram_gb = round(ram_kb / 1048576, 1)
 
     # Uptime
-    uptime_raw = await read_file("/proc/uptime")
+    uptime_raw = await read_file(f"{HOST_PROC}/uptime")
     uptime_secs = float(uptime_raw.split()[0]) if uptime_raw else 0
     days = int(uptime_secs // 86400)
     hours = int((uptime_secs % 86400) // 3600)
@@ -67,7 +67,7 @@ async def collect_node_info() -> NodeInfo:
     uptime_human = " ".join(parts)
 
     # Load
-    loadavg = await read_file("/proc/loadavg")
+    loadavg = await read_file(f"{HOST_PROC}/loadavg")
     load_parts = loadavg.split()
     load_1m = float(load_parts[0]) if len(load_parts) > 0 else 0
     load_5m = float(load_parts[1]) if len(load_parts) > 1 else 0

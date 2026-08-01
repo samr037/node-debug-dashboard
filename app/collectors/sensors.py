@@ -2,6 +2,7 @@ import glob
 import os
 
 from app.collectors.base import read_file, ttl_cache
+from app.config import HOST_SYS
 from app.models.hardware import SensorReading
 
 
@@ -10,7 +11,7 @@ async def collect_sensors() -> list[SensorReading]:
     readings: list[SensorReading] = []
 
     # hwmon sensors
-    for hwmon_dir in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
+    for hwmon_dir in sorted(glob.glob(f"{HOST_SYS}/class/hwmon/hwmon*")):
         chip_name = (await read_file(f"{hwmon_dir}/name")).strip() or os.path.basename(
             hwmon_dir
         )
@@ -99,7 +100,7 @@ async def collect_sensors() -> list[SensorReading]:
             )
 
     # Thermal zones (fallback)
-    for tz_dir in sorted(glob.glob("/sys/class/thermal/thermal_zone*")):
+    for tz_dir in sorted(glob.glob(f"{HOST_SYS}/class/thermal/thermal_zone*")):
         temp_str = (await read_file(f"{tz_dir}/temp")).strip()
         if not temp_str:
             continue

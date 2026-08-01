@@ -303,6 +303,7 @@ docker run --privileged --net=host --pid=host \
 |---|---|---|
 | `HOST_ROOT` | `/host` | Host root filesystem mount path |
 | `HOST_PROC` | `/host-proc` | Host /proc mount path |
+| `HOST_SYS` | `/sys` | Host /sys path (already the host's under `privileged`) |
 | `CACHE_TTL` | `10` | Default collector cache TTL in seconds |
 | `COMMAND_TIMEOUT` | `10` | Subprocess timeout in seconds |
 | `DMESG_WINDOW_HOURS` | `168` | How far back to scan the kernel ring buffer for faults |

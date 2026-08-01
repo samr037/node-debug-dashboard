@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timezone
 
 from app.collectors.base import read_file, run_command, ttl_cache
-from app.config import HOST_ROOT
+from app.config import HOST_PROC, HOST_ROOT, HOST_SYS
 from app.models.talos import (
     TalosCertificateInfo,
     TalosMachineConfig,
@@ -82,15 +82,18 @@ async def collect_talos_machine_config() -> TalosMachineConfig:
     stdout, _, rc = await run_command(
         [
             "nsenter",
-            f"--mount={HOST_ROOT}/../host-proc/1/ns/mnt",
+            # Was spelled {HOST_ROOT}/../host-proc/..., which only resolved
+            # correctly while both paths kept their defaults.
+            f"--mount={HOST_PROC}/1/ns/mnt",
             "--",
+            # Inside the host mount namespace, so this is the host's /proc.
             "cat",
             "/proc/cmdline",
         ]
     )
     if rc != 0:
         # Fallback: read from /host-proc directly
-        stdout = await read_file("/host-proc/cmdline")
+        stdout = await read_file(f"{HOST_PROC}/cmdline")
     for part in stdout.split():
         if part.startswith("talos.platform="):
             pass  # could extract platform
@@ -100,7 +103,7 @@ async def collect_talos_machine_config() -> TalosMachineConfig:
     # Get network interfaces from the host
     interfaces: list[TalosNetworkInterface] = []
     try:
-        iface_names = os.listdir("/sys/class/net/")
+        iface_names = os.listdir(f"{HOST_SYS}/class/net/")
     except OSError:
         iface_names = []
 
