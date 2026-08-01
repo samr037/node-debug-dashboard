@@ -71,6 +71,13 @@ privileged: true
 # Mount host / at /host. Required for SMART, sensors, EFI, Talos bits.
 hostRootMount: true
 
+# Mount the host's /dev and /sys explicitly. A privileged container already
+# sees both, so this is belt-and-braces rather than strictly required — but
+# it makes the dependency visible, and matches the reference DaemonSet in
+# the README, which the chart otherwise quietly diverged from.
+hostDevMount: true
+hostSysMount: true
+
 # Read-only access on nodes, pods, services, endpoints, events.
 # Used by the Kubernetes section and kdiag-* scripts.
 serviceAccount:
@@ -88,13 +95,17 @@ tolerations:
 nodeSelector: {}
 affinity: {}
 
+# Observed usage across a 5-node cluster peaked at 350Mi, above the 256Mi
+# limit this chart previously defaulted to — so a chart install would be
+# OOMKilled on a busy node while the reference DaemonSet was fine. Sized
+# from that measurement with headroom for a smartctl sweep across disks.
 resources:
   requests:
     cpu: 50m
-    memory: 64Mi
+    memory: 128Mi
   limits:
-    cpu: 500m
-    memory: 256Mi
+    cpu: "1"
+    memory: 1Gi
 
 priorityClassName: ""
 

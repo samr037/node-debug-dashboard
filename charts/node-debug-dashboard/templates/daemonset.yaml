@@ -125,6 +125,14 @@ spec:
             - name: host-proc
               mountPath: /host-proc
               readOnly: true
+            {{- if .Values.hostDevMount }}
+            - name: host-dev
+              mountPath: /dev
+            {{- end }}
+            {{- if .Values.hostSysMount }}
+            - name: host-sys
+              mountPath: /sys
+            {{- end }}
       volumes:
         {{- if .Values.hostRootMount }}
         - name: host-root
@@ -136,3 +144,15 @@ spec:
           hostPath:
             path: /proc
             type: Directory
+        {{- if .Values.hostDevMount }}
+        - name: host-dev
+          hostPath:
+            path: /dev
+            type: Directory
+        {{- end }}
+        {{- if .Values.hostSysMount }}
+        - name: host-sys
+          hostPath:
+            path: /sys
+            type: Directory
+        {{- end }}
