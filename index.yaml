@@ -6,6 +6,38 @@ entries:
       artifacthub.io/license: MIT
     apiVersion: v2
     appVersion: 0.3.0
+    created: "2026-08-01T07:53:08.306588598Z"
+    description: Hardware monitoring, Kubernetes diagnostics, and SSH debug shell
+      for Talos Linux (and any K8s) nodes
+    digest: 7e80d9a91585964412f187c690d18279cbef3ba373c134a705951d76f9c66512
+    home: https://github.com/samr037/node-debug-dashboard
+    icon: https://raw.githubusercontent.com/samr037/node-debug-dashboard/main/docs/talos-logo.svg
+    keywords:
+    - talos
+    - talos-linux
+    - kubernetes
+    - debugging
+    - diagnostics
+    - hardware
+    - smart
+    - etcd
+    - daemonset
+    kubeVersion: '>=1.24.0-0'
+    maintainers:
+    - name: samr037
+      url: https://github.com/samr037
+    name: node-debug-dashboard
+    sources:
+    - https://github.com/samr037/node-debug-dashboard
+    type: application
+    urls:
+    - https://github.com/samr037/node-debug-dashboard/releases/download/node-debug-dashboard-0.3.2/node-debug-dashboard-0.3.2.tgz
+    version: 0.3.2
+  - annotations:
+      artifacthub.io/category: monitoring-logging
+      artifacthub.io/license: MIT
+    apiVersion: v2
+    appVersion: 0.3.0
     created: "2026-08-01T07:40:31.085938403Z"
     description: Hardware monitoring, Kubernetes diagnostics, and SSH debug shell
       for Talos Linux (and any K8s) nodes
@@ -225,4 +257,4 @@ entries:
     urls:
     - https://github.com/samr037/node-debug-dashboard/releases/download/node-debug-dashboard-0.1.0/node-debug-dashboard-0.1.0.tgz
     version: 0.1.0
-generated: "2026-08-01T07:40:31.085967116Z"
+generated: "2026-08-01T07:53:08.306625678Z"
