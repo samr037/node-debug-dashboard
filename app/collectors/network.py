@@ -5,7 +5,12 @@ import httpx
 
 from app.collectors.base import read_file, run_command, ttl_cache
 from app.config import HOST_ROOT
-from app.httpclient import insecure_client, public_client
+from app.httpclient import (
+    bearer,
+    insecure_client,
+    public_client,
+    read_service_account_token,
+)
 from app.models.hardware import NICInfo
 
 
@@ -128,11 +133,16 @@ async def collect_connectivity() -> dict:
     k8s_host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
     k8s_port = os.environ.get("KUBERNETES_SERVICE_PORT", "")
     if k8s_host:
+        # /healthz is not an anonymous endpoint; without the service account
+        # token this probe got a 401 and always reported the API unreachable.
         try:
+            token = await read_service_account_token()
             response = await insecure_client().get(
-                f"https://{k8s_host}:{k8s_port}/healthz", timeout=5
+                f"https://{k8s_host}:{k8s_port}/healthz",
+                timeout=5,
+                headers=bearer(token),
             )
-            k8s_ok = "ok" in response.text
+            k8s_ok = response.text.strip().lower() == "ok"
         except httpx.HTTPError:
             k8s_ok = False
 

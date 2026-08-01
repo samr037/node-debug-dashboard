@@ -318,6 +318,11 @@ async def collect_k8s_components() -> list[K8sComponentStatus]:
         "kube-proxy": "http://localhost:10249/healthz",
     }
 
+    # The API server rejects anonymous requests to /healthz with a 401, so
+    # an unauthenticated probe reported it permanently Unhealthy on a
+    # perfectly working control plane. The others accept the header happily.
+    token = await read_service_account_token()
+
     async def probe(name: str, url: str) -> K8sComponentStatus:
         # etcd needs client certs on Talos; the rest serve self-signed certs
         # on localhost, so verification is off either way.
@@ -325,14 +330,16 @@ async def collect_k8s_components() -> list[K8sComponentStatus]:
         body = ""
         if client is not None:
             try:
-                response = await client.get(url, timeout=2)
+                response = await client.get(
+                    url, timeout=2, headers={} if name == "etcd" else bearer(token)
+                )
                 body = response.text
             except httpx.HTTPError:
                 body = ""
 
         if not body.strip():
             health_status, running = "Unknown", False
-        elif "ok" in body.lower() or '"health":"true"' in body.lower():
+        elif body.strip().lower() == "ok" or '"health":"true"' in body.lower():
             health_status, running = "Healthy", True
         else:
             health_status, running = "Unhealthy", False
