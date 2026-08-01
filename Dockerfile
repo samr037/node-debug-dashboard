@@ -1,4 +1,8 @@
-FROM debian:bookworm
+# Pinned by digest: an unpinned tag means two builds of the same commit can
+# produce different images, which is exactly what you do not want when the
+# artifact is a debugging tool you compare across nodes.
+# debian:bookworm as of 2026-08-01.
+FROM debian:bookworm@sha256:9344f8b8992482f80cba753f323adeaf17690076c095ccff6cc9536be98185dc
 
 # All diagnostic tools baked at build time — no runtime apt-get needed
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -47,10 +51,21 @@ RUN curl -fsSL "https://github.com/kubernetes-sigs/cri-tools/releases/download/$
     && chmod +x /usr/local/bin/crictl \
     && printf 'runtime-endpoint: unix:///host/run/containerd/containerd.sock\nimage-endpoint: unix:///host/run/containerd/containerd.sock\n' > /etc/crictl.yaml
 
-# Oh-My-Zsh — shared install for all users
-RUN git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git /opt/oh-my-zsh \
-    && git clone --depth=1 https://github.com/zsh-users/zsh-autosuggestions /opt/oh-my-zsh/custom/plugins/zsh-autosuggestions \
-    && git clone --depth=1 https://github.com/zsh-users/zsh-syntax-highlighting /opt/oh-my-zsh/custom/plugins/zsh-syntax-highlighting
+# Oh-My-Zsh — shared install for all users, pinned to specific commits.
+# These were cloned from master at build time, so the shell environment
+# shipped in a "reproducible" image changed whenever upstream pushed.
+ARG OHMYZSH_REF=c5ba74cf02cce4c342153f79089100194f30940f
+ARG ZSH_AUTOSUGGESTIONS_REF=85919cd1ffa7d2d5412f6d3fe437ebdbeeec4fc5
+ARG ZSH_SYNTAX_HIGHLIGHTING_REF=1d85c692615a25fe2293bdd44b34c217d5d2bf04
+RUN set -eux; \
+    clone_at() { \
+        git clone --quiet "$1" "$2"; \
+        git -C "$2" checkout --quiet "$3"; \
+        rm -rf "$2/.git"; \
+    }; \
+    clone_at https://github.com/ohmyzsh/ohmyzsh.git /opt/oh-my-zsh "$OHMYZSH_REF"; \
+    clone_at https://github.com/zsh-users/zsh-autosuggestions /opt/oh-my-zsh/custom/plugins/zsh-autosuggestions "$ZSH_AUTOSUGGESTIONS_REF"; \
+    clone_at https://github.com/zsh-users/zsh-syntax-highlighting /opt/oh-my-zsh/custom/plugins/zsh-syntax-highlighting "$ZSH_SYNTAX_HIGHLIGHTING_REF"
 
 # Python application
 WORKDIR /opt/node-dashboard

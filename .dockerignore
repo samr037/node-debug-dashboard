@@ -1,0 +1,22 @@
+# Keep the build context to what the image actually needs. docs/ alone is
+# ~9MB of screenshots that were being uploaded to the daemon on every build.
+.git
+.github
+docs
+tests
+charts
+.venv
+__pycache__
+*.pyc
+*.pyo
+.ruff_cache
+.pytest_cache
+*.egg-info
+dist
+build
+.env
+README.md
+CONTRIBUTING.md
+LICENSE
+pyproject.toml
+requirements-dev.txt
