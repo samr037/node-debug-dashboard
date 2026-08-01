@@ -508,6 +508,7 @@ tr:hover td {
 .sev-ok { color: var(--green); }
 .sev-warning { color: var(--yellow); }
 .sev-critical { color: var(--red); }
+.sev-unknown { color: var(--text-dim); }
 
 /* Footer */
 .footer {

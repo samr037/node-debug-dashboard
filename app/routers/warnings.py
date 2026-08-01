@@ -26,7 +26,9 @@ async def get_warnings():
 
     # SMART warnings
     for smart in await collect_all_smart():
-        if not smart.health_passed:
+        # Only an explicit False is a failure. None means the drive never
+        # reported, which is not the same thing and must not page anyone.
+        if smart.health_passed is False:
             warnings.append(
                 Warning(
                     severity="critical",

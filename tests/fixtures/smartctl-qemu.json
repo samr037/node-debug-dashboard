@@ -1,0 +1,69 @@
+{
+  "json_format_version": [
+    1,
+    0
+  ],
+  "smartctl": {
+    "version": [
+      7,
+      3
+    ],
+    "svn_revision": "5338",
+    "platform_info": "x86_64-linux-6.18.15-talos",
+    "build_info": "(local build)",
+    "argv": [
+      "smartctl",
+      "-a",
+      "/dev/sda",
+      "--json"
+    ],
+    "exit_status": 4
+  },
+  "local_time": {
+    "time_t": 1785566593,
+    "asctime": "Sat Aug  1 06:43:13 2026 UTC"
+  },
+  "device": {
+    "name": "/dev/sda",
+    "info_name": "/dev/sda",
+    "type": "scsi",
+    "protocol": "SCSI"
+  },
+  "scsi_vendor": "QEMU",
+  "scsi_product": "QEMU HARDDISK",
+  "scsi_model_name": "QEMU QEMU HARDDISK",
+  "scsi_revision": "2.5+",
+  "scsi_version": "SPC-3",
+  "user_capacity": {
+    "blocks": 67108864,
+    "bytes": 34359738368
+  },
+  "logical_block_size": 512,
+  "scsi_lb_provisioning": {
+    "name": "thin provisioned",
+    "value": 2,
+    "management_enabled": {
+      "name": "LBPME",
+      "value": -1
+    },
+    "read_zeros": {
+      "name": "LBPRZ",
+      "value": 0
+    }
+  },
+  "rotation_rate": 0,
+  "device_type": {
+    "scsi_terminology": "Peripheral Device Type [PDT]",
+    "scsi_value": 0,
+    "name": "disk"
+  },
+  "smart_support": {
+    "available": false
+  },
+  "temperature": {
+    "current": 0
+  },
+  "scsi_temperature": {
+    "drive_trip": 0
+  }
+}

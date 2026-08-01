@@ -414,10 +414,17 @@ function renderStorage(storage) {
     if (storage.smart.length) {
         let smartHtml = '';
         for (const s of storage.smart) {
-            const statusClass = s.health_passed ? 'sev-ok' : 'sev-critical';
+            // health_passed is null when the drive reports no SMART at all.
+            // That is not a pass and not a failure — say so rather than pick one.
+            const statusClass = s.health_passed == null
+                ? 'sev-unknown'
+                : (s.health_passed ? 'sev-ok' : 'sev-critical');
+            const statusText = s.health_passed == null
+                ? 'NOT REPORTED'
+                : (s.health_passed ? 'PASSED' : 'FAILED');
             smartHtml += `<div style="margin-top:8px;font-weight:500;color:var(--text-bright)">${esc(s.device)} — ${esc(s.model || 'Unknown')}</div>`;
             smartHtml += `<div class="kv-grid">
-                <span class="kv-key">Health</span><span class="kv-val ${statusClass}">${s.health_passed ? 'PASSED' : 'FAILED'}</span>
+                <span class="kv-key">Health</span><span class="kv-val ${statusClass}">${statusText}</span>
                 <span class="kv-key">Serial</span><span class="kv-val">${esc(s.serial || '-')}</span>
                 <span class="kv-key">Temperature</span><span class="kv-val">${s.temperature_celsius != null ? s.temperature_celsius + '°C' : '-'}</span>
                 <span class="kv-key">Power-On Hours</span><span class="kv-val">${s.power_on_hours != null ? s.power_on_hours.toLocaleString() + 'h' : '-'}</span>

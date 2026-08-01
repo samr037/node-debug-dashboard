@@ -33,7 +33,11 @@ class SmartHealth(BaseModel):
     device: str
     model: str | None = None
     serial: str | None = None
-    health_passed: bool = True
+    # Whether the drive answered a SMART health query at all. Virtual disks
+    # and iSCSI LUNs do not, and must not be presented as healthy.
+    smart_available: bool = False
+    # None means "not reported", which is distinct from "reported as failing".
+    health_passed: bool | None = None
     temperature_celsius: int | None = None
     power_on_hours: int | None = None
     wear_leveling_percent: int | None = None

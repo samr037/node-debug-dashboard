@@ -85,10 +85,32 @@ async def collect_smart_for_device(device: str) -> SmartHealth | None:
     except json.JSONDecodeError:
         return None
 
-    health_passed = True
-    smart_status = data.get("smart_status", {})
-    if isinstance(smart_status, dict):
-        health_passed = smart_status.get("passed", True)
+    return parse_smart(data, dev_path)
+
+
+def parse_smart(data: dict, dev_path: str) -> SmartHealth:
+    """Build SmartHealth from `smartctl -a --json` output."""
+    # Virtual and network-backed disks lie about SMART in two different ways,
+    # and the old `.get("passed", True)` default turned both into a green
+    # PASSED with no model, no serial and 0 C:
+    #
+    #   QEMU disks     smart_status: null, smart_support.available: false
+    #   Longhorn LUNs  smart_status.passed: true, but support.enabled: false
+    #
+    # So a health verdict only counts when SMART is actually enabled on the
+    # drive, not merely advertised.
+    smart_status = data.get("smart_status")
+    health_passed = None
+    if isinstance(smart_status, dict) and isinstance(smart_status.get("passed"), bool):
+        health_passed = smart_status["passed"]
+
+    smart_support = data.get("smart_support")
+    if isinstance(smart_support, dict):
+        enabled = smart_support.get("enabled", smart_support.get("available"))
+        if enabled is False:
+            health_passed = None
+
+    smart_available = health_passed is not None
 
     temp = None
     temp_data = data.get("temperature", {})
@@ -137,8 +159,11 @@ async def collect_smart_for_device(device: str) -> SmartHealth | None:
 
     return SmartHealth(
         device=dev_path,
-        model=data.get("model_name") or data.get("model_family"),
+        model=data.get("model_name")
+        or data.get("model_family")
+        or data.get("scsi_model_name"),
         serial=data.get("serial_number"),
+        smart_available=smart_available,
         health_passed=health_passed,
         temperature_celsius=temp,
         power_on_hours=power_on,
@@ -148,16 +173,34 @@ async def collect_smart_for_device(device: str) -> SmartHealth | None:
     )
 
 
+# Transports that are network- or hypervisor-attached rather than a physical
+# drive in this machine. Longhorn presents one iSCSI LUN per volume, which
+# swamped the storage view with entries that have no hardware behind them.
+_REMOTE_TRANSPORTS = {"iscsi", "fc", "fcoe", "nbd", "rbd"}
+
+
+def smart_candidates(disks: list[DiskInfo]) -> list[str]:
+    """Device paths worth asking SMART about.
+
+    Driven off lsblk rather than a /dev glob. The old patterns were
+    "/dev/sd?" and "/dev/nvme?", which missed virtio disks (/dev/vd*), eMMC
+    and SD cards (/dev/mmcblk*), and any node with more than ten NVMe
+    namespaces, while happily including every attached iSCSI LUN.
+    """
+    return [
+        f"/dev/{d.name}"
+        for d in disks
+        if (d.transport or "").lower() not in _REMOTE_TRANSPORTS
+    ]
+
+
 @ttl_cache(seconds=300)
 async def collect_all_smart() -> list[SmartHealth]:
     results: list[SmartHealth] = []
-    for pattern in ("/dev/sd?", "/dev/nvme?"):
-        import glob as g
-
-        for dev in sorted(g.glob(pattern)):
-            smart = await collect_smart_for_device(dev)
-            if smart:
-                results.append(smart)
+    for dev in smart_candidates(await collect_disks()):
+        smart = await collect_smart_for_device(dev)
+        if smart:
+            results.append(smart)
     return results
 
 

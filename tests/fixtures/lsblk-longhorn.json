@@ -1,0 +1,281 @@
+{
+   "blockdevices": [
+      {
+         "name": "loop0",
+         "size": "4K",
+         "type": "loop",
+         "mountpoint": null,
+         "fstype": null,
+         "model": null,
+         "serial": null,
+         "rota": false,
+         "tran": null
+      },{
+         "name": "loop1",
+         "size": "676K",
+         "type": "loop",
+         "mountpoint": null,
+         "fstype": null,
+         "model": null,
+         "serial": null,
+         "rota": false,
+         "tran": null
+      },{
+         "name": "loop2",
+         "size": "100K",
+         "type": "loop",
+         "mountpoint": null,
+         "fstype": null,
+         "model": null,
+         "serial": null,
+         "rota": false,
+         "tran": null
+      },{
+         "name": "loop3",
+         "size": "6.8M",
+         "type": "loop",
+         "mountpoint": null,
+         "fstype": null,
+         "model": null,
+         "serial": null,
+         "rota": false,
+         "tran": null
+      },{
+         "name": "loop4",
+         "size": "71.7M",
+         "type": "loop",
+         "mountpoint": null,
+         "fstype": null,
+         "model": null,
+         "serial": null,
+         "rota": false,
+         "tran": null
+      },{
+         "name": "sda",
+         "size": "32G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "QEMU HARDDISK   ",
+         "serial": null,
+         "rota": true,
+         "tran": null,
+         "children": [
+            {
+               "name": "sda1",
+               "size": "100M",
+               "type": "part",
+               "mountpoint": null,
+               "fstype": null,
+               "model": null,
+               "serial": null,
+               "rota": true,
+               "tran": null
+            },{
+               "name": "sda2",
+               "size": "1M",
+               "type": "part",
+               "mountpoint": null,
+               "fstype": null,
+               "model": null,
+               "serial": null,
+               "rota": true,
+               "tran": null
+            },{
+               "name": "sda3",
+               "size": "2G",
+               "type": "part",
+               "mountpoint": null,
+               "fstype": null,
+               "model": null,
+               "serial": null,
+               "rota": true,
+               "tran": null
+            },{
+               "name": "sda4",
+               "size": "1M",
+               "type": "part",
+               "mountpoint": null,
+               "fstype": null,
+               "model": null,
+               "serial": null,
+               "rota": true,
+               "tran": null
+            },{
+               "name": "sda5",
+               "size": "100M",
+               "type": "part",
+               "mountpoint": null,
+               "fstype": null,
+               "model": null,
+               "serial": null,
+               "rota": true,
+               "tran": null
+            },{
+               "name": "sda6",
+               "size": "29.8G",
+               "type": "part",
+               "mountpoint": "/host/var",
+               "fstype": null,
+               "model": null,
+               "serial": null,
+               "rota": true,
+               "tran": null
+            }
+         ]
+      },{
+         "name": "sdb",
+         "size": "320G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "QEMU HARDDISK   ",
+         "serial": null,
+         "rota": true,
+         "tran": null,
+         "children": [
+            {
+               "name": "sdb1",
+               "size": "320G",
+               "type": "part",
+               "mountpoint": "/host/var/mnt/longhorn-data",
+               "fstype": null,
+               "model": null,
+               "serial": null,
+               "rota": true,
+               "tran": null
+            }
+         ]
+      },{
+         "name": "sdc",
+         "size": "20G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "VIRTUAL-DISK    ",
+         "serial": null,
+         "rota": true,
+         "tran": "iscsi"
+      },{
+         "name": "sdd",
+         "size": "8G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "VIRTUAL-DISK    ",
+         "serial": null,
+         "rota": true,
+         "tran": "iscsi"
+      },{
+         "name": "sde",
+         "size": "8G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "VIRTUAL-DISK    ",
+         "serial": null,
+         "rota": true,
+         "tran": "iscsi"
+      },{
+         "name": "sdf",
+         "size": "2G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "VIRTUAL-DISK    ",
+         "serial": null,
+         "rota": true,
+         "tran": "iscsi"
+      },{
+         "name": "sdg",
+         "size": "5G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "VIRTUAL-DISK    ",
+         "serial": null,
+         "rota": true,
+         "tran": "iscsi"
+      },{
+         "name": "sdh",
+         "size": "20G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "VIRTUAL-DISK    ",
+         "serial": null,
+         "rota": true,
+         "tran": "iscsi"
+      },{
+         "name": "sdi",
+         "size": "2G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "VIRTUAL-DISK    ",
+         "serial": null,
+         "rota": true,
+         "tran": "iscsi"
+      },{
+         "name": "sdj",
+         "size": "10G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "VIRTUAL-DISK    ",
+         "serial": null,
+         "rota": true,
+         "tran": "iscsi"
+      },{
+         "name": "sdk",
+         "size": "1G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "VIRTUAL-DISK    ",
+         "serial": null,
+         "rota": true,
+         "tran": "iscsi"
+      },{
+         "name": "sdl",
+         "size": "100M",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "VIRTUAL-DISK    ",
+         "serial": null,
+         "rota": true,
+         "tran": "iscsi"
+      },{
+         "name": "sdm",
+         "size": "8G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "VIRTUAL-DISK    ",
+         "serial": null,
+         "rota": true,
+         "tran": "iscsi"
+      },{
+         "name": "sdn",
+         "size": "10G",
+         "type": "disk",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "VIRTUAL-DISK    ",
+         "serial": null,
+         "rota": true,
+         "tran": "iscsi"
+      },{
+         "name": "sr0",
+         "size": "301.3M",
+         "type": "rom",
+         "mountpoint": null,
+         "fstype": null,
+         "model": "QEMU DVD-ROM    ",
+         "serial": null,
+         "rota": true,
+         "tran": "ata"
+      }
+   ]
+}

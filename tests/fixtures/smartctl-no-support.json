@@ -1,0 +1,78 @@
+{
+  "json_format_version": [
+    1,
+    0
+  ],
+  "smartctl": {
+    "version": [
+      7,
+      3
+    ],
+    "svn_revision": "5338",
+    "platform_info": "x86_64-linux-6.18.15-talos",
+    "build_info": "(local build)",
+    "argv": [
+      "smartctl",
+      "-a",
+      "/dev/sdc",
+      "--json"
+    ],
+    "exit_status": 4
+  },
+  "local_time": {
+    "time_t": 1785566463,
+    "asctime": "Sat Aug  1 06:41:03 2026 UTC"
+  },
+  "device": {
+    "name": "/dev/sdc",
+    "info_name": "/dev/sdc",
+    "type": "scsi",
+    "protocol": "SCSI"
+  },
+  "scsi_vendor": "IET",
+  "scsi_product": "VIRTUAL-DISK",
+  "scsi_model_name": "IET VIRTUAL-DISK",
+  "scsi_revision": "0001",
+  "scsi_version": "SPC-3",
+  "user_capacity": {
+    "blocks": 41943040,
+    "bytes": 21474836480
+  },
+  "logical_block_size": 512,
+  "scsi_lb_provisioning": {
+    "name": "thin provisioned",
+    "value": 2,
+    "management_enabled": {
+      "name": "LBPME",
+      "value": -1
+    },
+    "read_zeros": {
+      "name": "LBPRZ",
+      "value": 1
+    }
+  },
+  "rotation_rate": 0,
+  "logical_unit_id": "0x30000001000000010x60000000000000000e00000000010001",
+  "serial_number": "beaf11",
+  "device_type": {
+    "scsi_terminology": "Peripheral Device Type [PDT]",
+    "scsi_value": 0,
+    "name": "disk"
+  },
+  "smart_support": {
+    "available": true,
+    "enabled": false
+  },
+  "temperature_warning": {
+    "enabled": false
+  },
+  "smart_status": {
+    "passed": true
+  },
+  "temperature": {
+    "current": 0
+  },
+  "scsi_temperature": {
+    "drive_trip": 0
+  }
+}
