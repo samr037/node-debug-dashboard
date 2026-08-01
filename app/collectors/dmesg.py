@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.collectors.base import read_file, run_command, ttl_cache
 from app.config import DMESG_WINDOW_HOURS, HOST_PROC
-from app.models.warnings import Warning
+from app.models.warnings import NodeWarning
 
 # Leading "[ 1234.5678]" seconds-since-boot stamp from plain dmesg.
 _MONOTONIC_RE = re.compile(r"^\[\s*(\d+\.\d+)\]\s*(.*)$")
@@ -160,7 +160,7 @@ def scan(
     boot_time: datetime | None = None,
     cutoff: datetime | None = None,
     window_hours: int = DMESG_WINDOW_HOURS,
-) -> list[Warning]:
+) -> list[NodeWarning]:
     """Apply the rules to dmesg output and summarise what matched."""
     hits: dict[Rule, list[str]] = {}
 
@@ -179,7 +179,7 @@ def scan(
                 hits.setdefault(rule, []).append(message.strip())
                 break
 
-    warnings: list[Warning] = []
+    warnings: list[NodeWarning] = []
     for rule in RULES:
         messages = hits.get(rule)
         if not messages:
@@ -187,7 +187,7 @@ def scan(
         # Show what actually matched — a bare count is not triageable.
         sample = "; ".join(m[:120] for m in messages[-2:])
         warnings.append(
-            Warning(
+            NodeWarning(
                 severity=rule.severity,
                 source=rule.source,
                 message=(
@@ -213,7 +213,7 @@ async def _boot_time() -> datetime | None:
 
 
 @ttl_cache()
-async def collect_dmesg_warnings() -> list[Warning]:
+async def collect_dmesg_warnings() -> list[NodeWarning]:
     stdout, _, rc = await run_command(["dmesg", "--time-format", "iso"])
     if rc != 0:
         stdout, _, rc = await run_command(["dmesg"])
