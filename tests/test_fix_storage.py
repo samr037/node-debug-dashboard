@@ -309,8 +309,24 @@ def test_parse_mountinfo_filters_and_dedups():
         ("/dev/sda1", "xfs", "/var"),
         ("/dev/sdb1", "ext4", "/var/mnt/my data"),
         ("srv:/export", "nfs4", "/var/mnt/nfs"),
-        ("overlay", "overlay", "/run/containerd/a/rootfs"),
     ]
+
+
+def test_parse_mountinfo_skips_read_only_talos_root():
+    # Real Talos host line: the root is a read-only overlay of image layers
+    # that df reports as 256K, 100% used.
+    talos = (
+        "51 2 0:29 / / ro,relatime shared:8 - overlay none "
+        "ro,seclabel,lowerdir+=/layers/layer0,redirect_dir=on\n"
+        "37 51 0:2 /extensions.yaml /etc/extensions.yaml ro shared:1 - rootfs rootfs rw\n"
+        "52 51 8:6 / /var rw,relatime shared:20 - xfs /dev/sda6 rw"
+    )
+    assert parse_mountinfo(talos) == [("/dev/sda6", "xfs", "/var")]
+
+
+def test_parse_mountinfo_keeps_container_root_overlay():
+    own = "100 90 0:60 / / rw,relatime - overlay overlay rw,lowerdir=/l,upperdir=/u"
+    assert parse_mountinfo(own) == [("overlay", "overlay", "/")]
 
 
 @pytest.fixture
@@ -331,7 +347,6 @@ async def test_df_runs_in_container_on_host_paths_and_survives_rc1(
             "File                                Size  Used Avail Use%",
             f"{P}/var                            100G   97G    3G  97%",
             f"{P}/var/mnt/my data                100G   50G   50G  50%",
-            f"{P}/run/containerd/a/rootfs        100G   97G    3G  97%",
         ]
     )
     run = _fake_run((stdout, "df: /host-proc/1/root/var/mnt/nfs: Stale file handle", 1))
@@ -342,7 +357,7 @@ async def test_df_runs_in_container_on_host_paths_and_survives_rc1(
     cmd = run.calls[0]
     assert cmd[0] == "df" and "nsenter" not in cmd
     assert f"{P}/var/mnt/my data" in cmd
-    assert set(usages) == {"/var", "/var/mnt/my data", "/run/containerd/a/rootfs"}
+    assert set(usages) == {"/var", "/var/mnt/my data"}
     assert usages["/var"].severity == "critical"
     assert usages["/var"].filesystem == "/dev/sda1"
     assert usages["/var/mnt/my data"].used_percent == 50
