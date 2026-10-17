@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1280, height=720" />
+<title>Node Debug Dashboard — demo</title>
+<!-- README demo video. Fictional demo data only.
+     Render: npx hyperframes render -c index.html -o ../media/ndd-demo.mp4 -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=block" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --hover:#1c2333; --border:#30363d; --text:#c9d1d9; --dim:#8b949e; --bright:#f0f6fc;
+          --green:#3fb950; --yellow:#d29922; --red:#f85149; --blue:#58a6ff; --cyan:#39d4e9; --talos:#ff7300; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); font-family:Inter, system-ui, sans-serif; color:var(--text); }
+  #root { position:relative; width:1280px; height:720px; overflow:hidden;
+          background:radial-gradient(110% 80% at 50% 0%, #161d2a 0%, var(--bg) 65%); }
+  .clip { position:absolute; inset:0; }
+  .center { display:grid; place-items:center; }
+  .mono { font-family:"JetBrains Mono", monospace; }
+
+  /* 1. Title */
+  #title .stack { display:flex; flex-direction:column; align-items:center; gap:20px; }
+  #title img { width:120px; height:120px; }
+  #title h1 { margin:0; font-size:76px; font-weight:800; letter-spacing:-2.5px; color:var(--bright); }
+  #title p { margin:0; font-size:28px; color:var(--dim); }
+  #title p b { color:var(--cyan); font-weight:600; }
+
+  /* Terminal window (used twice) */
+  .term { position:absolute; background:#0a0e14; border-radius:14px; overflow:hidden;
+          box-shadow:0 30px 80px rgba(0,0,0,.55), 0 0 0 1px var(--border); }
+  .term .bar { height:40px; background:#12171f; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:8px; padding:0 16px; }
+  .dot { width:12px; height:12px; border-radius:50%; }
+  .term .bar .t { margin-left:12px; font-size:14px; color:var(--dim); }
+  .term pre { margin:0; padding:22px 26px; font:500 19px/1.6 "JetBrains Mono", monospace; color:var(--text); white-space:pre; }
+  .p { color:var(--green); } .c { color:var(--cyan); } .r { color:var(--red); } .y { color:var(--yellow); } .d { color:var(--dim); } .b { color:var(--bright); }
+
+  /* 2. Problem */
+  #problem .term { left:150px; top:150px; width:980px; height:330px; }
+  #problem .line { opacity:0; }
+  #problem h2 { position:absolute; left:0; right:0; top:540px; margin:0; text-align:center; font-size:32px; font-weight:700; color:var(--bright); letter-spacing:-.5px; opacity:0; }
+  #problem h2 em { font-style:normal; color:var(--cyan); }
+
+  /* 3. Dashboard mock */
+  #dash .app { position:absolute; left:80px; top:72px; width:1120px; height:610px; background:var(--bg); border-radius:14px; overflow:hidden;
+               box-shadow:0 30px 90px rgba(0,0,0,.6), 0 0 0 1px var(--border); font-family:"JetBrains Mono", monospace; }
+  .hdr { height:56px; display:flex; align-items:center; gap:16px; padding:0 22px; border-bottom:1px solid var(--border); }
+  .hdr .brand { color:var(--cyan); font-size:19px; font-weight:700; }
+  .hdr .node { color:var(--bright); font-size:17px; font-weight:700; }
+  .tag { font-size:12px; padding:3px 8px; border-radius:5px; }
+  .tag.cp { color:var(--blue); background:rgba(88,166,255,.14); }
+  .hdr .sp { flex:1; }
+  .hdr .nodes { font-size:14px; color:var(--cyan); border:1px solid var(--border); border-radius:6px; padding:6px 12px; }
+  .meta { display:flex; align-items:center; gap:26px; padding:14px 22px; border-bottom:1px solid var(--border); font-size:14px; color:var(--dim); }
+  .meta b { color:var(--bright); font-weight:500; }
+  .gauge { display:flex; align-items:center; gap:10px; }
+  .gauge .track { display:block; width:120px; height:8px; border-radius:4px; background:#21262d; overflow:hidden; }
+  .gauge .fill { display:block; height:100%; width:0; border-radius:4px; }
+  .content { padding:18px 22px; display:flex; flex-direction:column; gap:12px; }
+  .warn { border:1px solid var(--border); border-left:4px solid var(--red); border-radius:8px; background:var(--card); padding:14px 18px; }
+  .warn .counts { display:flex; gap:10px; margin-bottom:10px; }
+  .pillr { font-size:13px; padding:3px 10px; border-radius:5px; color:var(--red); background:rgba(248,81,73,.15); }
+  .pilly { font-size:13px; padding:3px 10px; border-radius:5px; color:var(--yellow); background:rgba(210,153,34,.15); }
+  .w { font-size:15px; padding:5px 0; opacity:0; }
+  .w i { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:10px; vertical-align:1px; }
+  .sec { border:1px solid var(--border); border-radius:8px; background:var(--card); padding:12px 18px; font-size:16px; font-weight:700; color:var(--bright); }
+  .sec .d { font-weight:400; font-size:14px; margin-left:12px; }
+  .smart { display:none; margin-top:12px; font-weight:400; font-size:14px; }
+  .smart table { width:100%; border-collapse:collapse; }
+  .smart td { padding:7px 6px; border-top:1px solid var(--border); color:var(--text); }
+  .smart td.ok { color:var(--green); } .smart td.bad { color:var(--red); font-weight:700; }
+  #cursor { position:absolute; width:22px; height:22px; left:150px; top:404px; opacity:0; z-index:5; }
+  #callout { position:absolute; right:80px; top:20px; padding:8px 16px; border-radius:20px; background:var(--cyan); color:#05222a; font:600 16px Inter, sans-serif; opacity:0; }
+
+  /* 4. SSH */
+  #ssh .term { left:120px; top:110px; width:1040px; height:420px; }
+  #ssh .line { opacity:0; }
+  #ssh .qbar { display:inline-block; width:0; height:14px; background:var(--green); vertical-align:-1px; }
+  #ssh h2 { position:absolute; left:0; right:0; top:580px; margin:0; text-align:center; font-size:28px; font-weight:600; color:var(--dim); opacity:0; }
+  #ssh h2 b { color:var(--bright); }
+
+  /* 5. Features */
+  #features h3 { position:absolute; top:88px; left:0; right:0; text-align:center; margin:0; font-size:40px; font-weight:800; letter-spacing:-1px; color:var(--bright); }
+  #features .grid { position:absolute; left:90px; right:90px; top:185px; display:grid; grid-template-columns:repeat(3, 1fr); gap:22px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:26px 26px; }
+  .card .k { font:600 13px "JetBrains Mono", monospace; color:var(--cyan); letter-spacing:1px; text-transform:uppercase; }
+  .card h2 { margin:10px 0 8px; font-size:25px; color:var(--bright); letter-spacing:-.4px; }
+  .card p { margin:0; font-size:16px; color:var(--dim); line-height:1.45; }
+
+  /* 6. Outro */
+  #outro .stack { display:flex; flex-direction:column; align-items:center; gap:18px; }
+  #outro img { width:88px; height:88px; }
+  #outro h1 { margin:0; font-size:60px; font-weight:800; letter-spacing:-2px; color:var(--bright); }
+  #outro .cmd { font:500 20px "JetBrains Mono", monospace; color:var(--text); background:#0a0e14; border:1px solid var(--border); border-radius:10px; padding:14px 22px; }
+  #outro .cmd .p { color:var(--green); }
+  #outro .url { font:500 24px "JetBrains Mono", monospace; color:var(--cyan); }
+  #outro .metaline { font-size:17px; color:var(--dim); }
+</style>
+</head>
+<body>
+<div id="root" data-composition-id="main" data-start="0" data-duration="23" data-width="1280" data-height="720">
+
+  <section id="title" class="clip center" data-start="0" data-duration="3" data-track-index="1">
+    <div class="stack">
+      <img id="t-logo" src="talos-logo.svg" alt="" />
+      <h1 id="t-name">Node Debug Dashboard</h1>
+      <p id="t-tag">Your Talos nodes have no shell. <b>Now they have a debugger.</b></p>
+    </div>
+  </section>
+
+  <section id="problem" class="clip" data-start="3" data-duration="4" data-track-index="1">
+    <div class="term" id="p-term">
+      <div class="bar"><div class="dot" style="background:#ff5f57"></div><div class="dot" style="background:#febc2e"></div><div class="dot" style="background:#28c840"></div><span class="t">~ — zsh</span></div>
+<pre><span class="line" id="p1"><span class="p">$</span> ssh root@worker-02</span>
+<span class="line" id="p2"><span class="r">ssh: connect to host worker-02 port 22: Connection refused</span></span>
+<span class="line" id="p3"><span class="d"># Talos: no SSH, no shell, no smartctl. By design.</span></span>
+
+<span class="line" id="p4"><span class="p">$</span> helm install ndd oci://ghcr.io/samr037/charts/node-debug-dashboard</span>
+<span class="line" id="p5"><span class="c">STATUS: deployed</span> <span class="d">· DaemonSet ready on 5/5 nodes</span></span></pre>
+    </div>
+    <h2 id="p-h">One privileged DaemonSet. <em>Every node, debuggable.</em></h2>
+  </section>
+
+  <section id="dash" class="clip" data-start="7" data-duration="6.4" data-track-index="1">
+    <div class="app" id="d-app">
+      <div class="hdr">
+        <span class="brand">Node Debug Dashboard</span><span class="node">cp-01</span><span class="tag cp">control-plane</span>
+        <span class="sp"></span><span class="nodes">5/5 nodes ▾</span>
+      </div>
+      <div class="meta">
+        <span>OS: <b>Talos (v1.12.4)</b></span><span>Kernel: <b>6.18.9-talos</b></span><span>Up: <b>12d 4h</b></span>
+        <span class="sp" style="flex:1"></span>
+        <span class="gauge">CPU <span class="track"><span class="fill" id="g-cpu" style="background:var(--green)"></span></span><b id="g-cpu-t">0%</b></span>
+        <span class="gauge">RAM <span class="track"><span class="fill" id="g-ram" style="background:var(--yellow)"></span></span><b id="g-ram-t">0%</b></span>
+      </div>
+      <div class="content">
+        <div class="warn">
+          <div class="counts"><span class="pillr">2 critical</span><span class="pilly">2 warning</span></div>
+          <div class="w"><i style="background:var(--red)"></i><span class="r">[smart]</span> nvme1n1: 24 pending sectors, 3 offline uncorrectable</div>
+          <div class="w"><i style="background:var(--red)"></i><span class="r">[certificate]</span> etcd peer cert expires in 6 days</div>
+          <div class="w"><i style="background:var(--yellow)"></i><span class="y">[temperature]</span> Tctl: 84.0°C (warn=80.0)</div>
+          <div class="w"><i style="background:var(--yellow)"></i><span class="y">[network]</span> enp6s0: CRC errors in the last 24h</div>
+        </div>
+        <div class="sec" id="s-storage">▸ Storage <span class="d">3 disks · SMART</span>
+          <div class="smart" id="smart">
+            <table>
+              <tr><td class="b">nvme0n1</td><td>Samsung 990 PRO 2TB</td><td>41°C</td><td>wear 3%</td><td class="ok">PASSED</td></tr>
+              <tr><td class="b">nvme1n1</td><td>WD Blue SN570 1TB</td><td>52°C</td><td>wear 71%</td><td class="bad">FAILING</td></tr>
+              <tr><td class="b">sda</td><td>Seagate IronWolf 8TB</td><td>36°C</td><td>—</td><td class="ok">PASSED</td></tr>
+            </table>
+          </div>
+        </div>
+        <div class="sec">▸ Kubernetes <span class="d">etcd leader · 3 members · DB 214 MB</span></div>
+        <div class="sec">▸ Containers <span class="d">31 running · live logs</span></div>
+      </div>
+    </div>
+    <svg id="cursor" viewBox="0 0 24 24"><path d="M3 2l17 10-7.5 1.6L9 21z" fill="#fff" stroke="#000" stroke-width="1.2"/></svg>
+    <div id="callout">Real SMART, temps, certs — at a glance</div>
+  </section>
+
+  <section id="ssh" class="clip" data-start="13.4" data-duration="4.4" data-track-index="1">
+    <div class="term" id="s-term">
+      <div class="bar"><div class="dot" style="background:#ff5f57"></div><div class="dot" style="background:#febc2e"></div><div class="dot" style="background:#28c840"></div><span class="t">ssh -p 2022 root@cp-01 — kdiag-etcd</span></div>
+<pre><span class="line"><span class="p">root@cp-01 ~ $</span> kdiag-etcd health &amp;&amp; kdiag-etcd size</span>
+<span class="line"><span class="c">── etcd Health ──</span></span>
+<span class="line">  <span class="p">✓</span> etcd is healthy   <span class="d">v3.6.7 · leader: THIS NODE</span></span>
+<span class="line"> </span>
+<span class="line"><span class="c">── etcd Database Size ──</span></span>
+<span class="line">  DB size:        <span class="b">214 MB</span>   In use: <span class="b">61 MB</span></span>
+<span class="line">  Fragmentation:  <span class="y">71%</span>  <span class="d">→ defrag recommended</span></span>
+<span class="line">  Quota usage:    [<span class="qbar" id="qbar"></span><span class="d" id="qrest">··························</span>] <span class="p">10%</span> <span class="d">(of 2 GiB default)</span></span></pre>
+    </div>
+    <h2 id="s-h">Opt-in SSH shell with <b>smartctl, ethtool, tcpdump</b> and 11 diag scripts</h2>
+  </section>
+
+  <section id="features" class="clip" data-start="17.8" data-duration="2.8" data-track-index="1">
+    <h3 id="f-title">No system extension. No node reboot.</h3>
+    <div class="grid">
+      <div class="card"><div class="k">Hardware</div><h2>SMART &amp; sensors</h2><p>Disks, NVMe wear, pending sectors, temps, DIMMs, PCI, GPUs.</p></div>
+      <div class="card"><div class="k">Kubernetes</div><h2>etcd &amp; PKI</h2><p>Leader, members, DB size, cert expiry, component health.</p></div>
+      <div class="card"><div class="k">Workloads</div><h2>Live logs</h2><p>Stream any container's logs, top processes, system services.</p></div>
+      <div class="card"><div class="k">Talos</div><h2>Talos-aware</h2><p>Schematic ID, extensions, machine type. Works on any K8s too.</p></div>
+      <div class="card"><div class="k">API</div><h2>REST + Swagger</h2><p>Every section as JSON at /api, docs at /docs.</p></div>
+      <div class="card"><div class="k">Secure</div><h2>Auth by default</h2><p>Generated password, scoped RBAC, optional NetworkPolicy.</p></div>
+    </div>
+  </section>
+
+  <section id="outro" class="clip center" data-start="20.6" data-duration="2.4" data-track-index="1">
+    <div class="stack">
+      <img src="talos-logo.svg" alt="" />
+      <h1>Node Debug Dashboard</h1>
+      <div class="cmd"><span class="p">$</span> helm install ndd oci://ghcr.io/samr037/charts/node-debug-dashboard</div>
+      <div class="url">github.com/samr037/node-debug-dashboard</div>
+      <div class="metaline">Open source (MIT) · Talos Linux &amp; any Kubernetes</div>
+    </div>
+  </section>
+</div>
+
+<script>
+  const tl = gsap.timeline({ paused: true });
+
+  // 1. Title
+  tl.fromTo("#t-logo", { scale: .5, opacity: 0, rotation: -20 }, { scale: 1, opacity: 1, rotation: 0, duration: .8, ease: "back.out(1.7)" }, .1);
+  tl.fromTo("#t-name", { y: 30, opacity: 0 }, { y: 0, opacity: 1, duration: .6, ease: "power3.out" }, .45);
+  tl.fromTo("#t-tag", { y: 20, opacity: 0 }, { y: 0, opacity: 1, duration: .6, ease: "power3.out" }, .8);
+  tl.to("#title .stack", { opacity: 0, y: -30, duration: .35, ease: "power2.in" }, 2.6);
+
+  // 2. Problem
+  const P = 3;
+  tl.fromTo("#p-term", { y: 40, opacity: 0 }, { y: 0, opacity: 1, duration: .5, ease: "power3.out" }, P);
+  [["#p1", .45], ["#p2", 1.0], ["#p3", 1.45], ["#p4", 2.0], ["#p5", 2.75]].forEach(([s, t]) =>
+    tl.to(s, { opacity: 1, duration: .15 }, P + t));
+  tl.fromTo("#p-h", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: .45, ease: "power3.out" }, P + 2.95);
+  tl.to(["#p-term", "#p-h"], { opacity: 0, y: -20, duration: .35, ease: "power2.in" }, P + 3.6);
+
+  // 3. Dashboard
+  const D = 7;
+  tl.fromTo("#d-app", { y: 50, opacity: 0, scale: .97 }, { y: 0, opacity: 1, scale: 1, duration: .6, ease: "power3.out" }, D);
+  tl.to("#g-cpu", { width: "38%", duration: .9, ease: "power2.out" }, D + .5);
+  tl.to("#g-ram", { width: "71%", duration: .9, ease: "power2.out" }, D + .5);
+  const cpu = { v: 0 }, ram = { v: 0 };
+  tl.to(cpu, { v: 38, duration: .9, ease: "power2.out", onUpdate: () => document.getElementById("g-cpu-t").textContent = Math.round(cpu.v) + "%" }, D + .5);
+  tl.to(ram, { v: 71, duration: .9, ease: "power2.out", onUpdate: () => document.getElementById("g-ram-t").textContent = Math.round(ram.v) + "%" }, D + .5);
+  tl.to("#dash .w", { opacity: 1, duration: .25, stagger: .22 }, D + .9);
+  tl.fromTo("#callout", { opacity: 0, y: -8 }, { opacity: 1, y: 0, duration: .35, ease: "back.out(2)" }, D + 1.9);
+  tl.fromTo("#cursor", { opacity: 0, x: 570, y: 200 }, { opacity: 1, duration: .2 }, D + 2.6);
+  tl.to("#cursor", { x: 0, y: 0, duration: .8, ease: "power2.inOut" }, D + 2.7);
+  tl.to("#cursor", { scale: .8, duration: .08, yoyo: true, repeat: 1 }, D + 3.5);
+  tl.set("#smart", { display: "block" }, D + 3.6);
+  tl.fromTo("#smart", { opacity: 0, y: -6 }, { opacity: 1, y: 0, duration: .3, immediateRender: false }, D + 3.6);
+  tl.to("#cursor", { opacity: 0, duration: .2 }, D + 4.4);
+  tl.to(["#d-app", "#callout"], { opacity: 0, y: -20, duration: .35, ease: "power2.in" }, D + 6.0);
+
+  // 4. SSH
+  const S = 13.4;
+  tl.fromTo("#s-term", { y: 40, opacity: 0 }, { y: 0, opacity: 1, duration: .5, ease: "power3.out" }, S);
+  tl.to("#ssh .line", { opacity: 1, duration: .12, stagger: .2 }, S + .5);
+  tl.to("#qbar", { width: 32, duration: .5, ease: "power2.out" }, S + 2.1);
+  tl.fromTo("#s-h", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: .45, ease: "power3.out" }, S + 2.3);
+  tl.to(["#s-term", "#s-h"], { opacity: 0, y: -20, duration: .35, ease: "power2.in" }, S + 4.0);
+
+  // 5. Features
+  const F = 17.8;
+  tl.fromTo("#f-title", { y: 20, opacity: 0 }, { y: 0, opacity: 1, duration: .45, ease: "power3.out" }, F + .05);
+  tl.fromTo("#features .card", { y: 40, opacity: 0 }, { y: 0, opacity: 1, duration: .5, ease: "power3.out", stagger: .08 }, F + .25);
+  tl.to(["#features .grid", "#f-title"], { opacity: 0, duration: .3 }, F + 2.5);
+
+  // 6. Outro
+  tl.fromTo("#outro .stack > *", { y: 24, opacity: 0 }, { y: 0, opacity: 1, duration: .5, ease: "power3.out", stagger: .1 }, 20.7);
+
+  window.__timelines = window.__timelines || {};
+  window.__timelines.main = tl;
+</script>
+</body>
+</html>
