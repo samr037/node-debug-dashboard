@@ -42,6 +42,16 @@ class SmartHealth(BaseModel):
     power_on_hours: int | None = None
     wear_leveling_percent: int | None = None
     reallocated_sectors: int | None = None
+    pending_sectors: int | None = None  # ATA 197, current pending sectors
+    offline_uncorrectable: int | None = None  # ATA 198
+    # smartctl exit-status bits 4-7, as text: findings smart_status.passed
+    # does not reflect (e.g. a self-test log with read failures).
+    smart_issues: list[str] = []
+    # The drive is spun down (smartctl -n standby): asleep, not broken.
+    standby: bool = False
+    # Why SMART could not be read (timeout, no output, invalid or unparseable
+    # JSON, device open/IDENTIFY failure). None for a sleeping drive.
+    error: str | None = None
     attributes: list[SmartAttribute] = []
 
 
