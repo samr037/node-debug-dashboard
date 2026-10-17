@@ -15,7 +15,7 @@ cmd_list() {
     fi
     header "Cluster Services"
     local svcs
-    svcs=$(k8s_api "/api/v1/services")
+    svcs=$(k8s_api "/api/v1/services") || return 0
 
     local reason
     reason=$(echo "$svcs" | jq -r '.reason // empty' 2>/dev/null)
@@ -25,7 +25,7 @@ cmd_list() {
     fi
 
     echo -e "  ${C_DIM}NAMESPACE            NAME                          TYPE          CLUSTER-IP       PORTS${C_RESET}"
-    echo "$svcs" | jq -r '.items[] |
+    echo "$svcs" | jq -r '.items[]? |
         .metadata.namespace as $ns |
         .metadata.name as $name |
         .spec.type as $type |
@@ -63,7 +63,7 @@ cmd_dns() {
 
     # CoreDNS pod check
     local coredns
-    coredns=$(k8s_api "/api/v1/namespaces/kube-system/pods?labelSelector=k8s-app=kube-dns")
+    coredns=$(k8s_api "/api/v1/namespaces/kube-system/pods?labelSelector=k8s-app=kube-dns") || true
     local dns_pods
     dns_pods=$(echo "$coredns" | jq -r '.items[]? | "\(.metadata.name)\t\(.status.phase)\t\(.status.podIP // "?")"' 2>/dev/null)
 
@@ -97,7 +97,8 @@ cmd_dns() {
     for target in "${tests[@]}"; do
         local start end result ms
         start=$(date +%s%N)
-        result=$(dig +short "$target" @"${dns_ip:-10.96.0.10}" +time=3 2>/dev/null | head -1)
+        # dig exits 9 on timeout: a failed lookup is a result here, not a reason to exit
+        result=$(dig +short "$target" @"${dns_ip:-10.96.0.10}" +time=3 2>/dev/null | head -1) || true
         end=$(date +%s%N)
         ms=$(( (end - start) / 1000000 ))
 
@@ -127,16 +128,18 @@ cmd_endpoints() {
 
     # Also check the node's running pods' namespaces
     local extra_ns
+    # Exact match (-x): "default-apps" is a namespace to check too. grep exits 1
+    # when nothing is left, which under pipefail aborted the script.
     extra_ns=$(k8s_api "/api/v1/pods?fieldSelector=spec.nodeName=${NODE_NAME}" | \
-        jq -r '[.items[].metadata.namespace] | unique | .[]' 2>/dev/null | \
-        grep -vE 'kube-system|default' | head -5)
+        jq -r '[.items[]?.metadata.namespace] | unique | .[]' 2>/dev/null | \
+        { grep -vxE 'kube-system|default' || true; } | head -5) || true
     for ns in $extra_ns; do
         namespaces+=("$ns")
     done
 
     for ns in "${namespaces[@]}"; do
         local eps
-        eps=$(k8s_api "/api/v1/namespaces/${ns}/endpoints")
+        eps=$(k8s_api "/api/v1/namespaces/${ns}/endpoints") || return 0
         local svc_count
         svc_count=$(echo "$eps" | jq '.items | length' 2>/dev/null) || svc_count=0
         # Check for RBAC forbidden
@@ -149,7 +152,7 @@ cmd_endpoints() {
         [ "${svc_count:-0}" = "0" ] && continue
 
         echo -e "  ${C_BOLD}${ns}:${C_RESET}"
-        echo "$eps" | jq -r '.items[] |
+        echo "$eps" | jq -r '.items[]? |
             .metadata.name as $name |
             ([.subsets[]?.addresses // [] | length] | add // 0) as $ready |
             ([.subsets[]?.notReadyAddresses // [] | length] | add // 0) as $notready |
@@ -183,10 +186,7 @@ cmd_connectivity() {
     # kube-apiserver
     local start end ms
     start=$(date +%s%N)
-    if curl -sk --max-time 5 -o /dev/null \
-        --cacert "$K8S_CA" \
-        -H "Authorization: Bearer $(cat $K8S_TOKEN_FILE 2>/dev/null)" \
-        "${K8S_API}/api/v1" 2>/dev/null; then
+    if k8s_api "/api/v1" --max-time 5 -o /dev/null 2>/dev/null; then
         ms=$(( ($(date +%s%N) - start) / 1000000 ))
         ok "kube-apiserver          ${C_DIM}${ms}ms${C_RESET}"
     else
@@ -225,10 +225,14 @@ cmd_connectivity() {
     # Metrics server (optional)
     start=$(date +%s%N)
     local metrics_test
-    metrics_test=$(k8s_api "/apis/metrics.k8s.io/v1beta1/nodes/${NODE_NAME}" 2>/dev/null)
+    metrics_test=$(k8s_api "/apis/metrics.k8s.io/v1beta1/nodes/${NODE_NAME}" 2>/dev/null) || true
     if echo "$metrics_test" | jq -e '.metadata.name' &>/dev/null; then
         ms=$(( ($(date +%s%N) - start) / 1000000 ))
         ok "metrics-server          ${C_DIM}${ms}ms${C_RESET}"
+    elif [ "$(echo "$metrics_test" | jq -r '.code? // empty' 2>/dev/null)" = "403" ]; then
+        # The API answered but RBAC refused: an older ClusterRole without
+        # metrics.k8s.io, not a missing metrics-server.
+        warn "metrics-server          (403: ServiceAccount lacks metrics.k8s.io nodes get; update the ClusterRole)"
     else
         dim "metrics-server          (not available)"
     fi

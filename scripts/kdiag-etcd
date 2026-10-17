@@ -28,7 +28,8 @@ cmd_health() {
     header "etcd Health"
 
     local health
-    health=$(etcd_api "/health")
+    # Unreachable etcd is exactly the case to report, so don't let set -e exit here
+    health=$(etcd_api "/health") || true
     local is_healthy
     is_healthy=$(echo "$health" | jq -r '.health // "false"' 2>/dev/null)
 
@@ -41,7 +42,7 @@ cmd_health() {
 
     # etcd version
     local version
-    version=$(etcd_api "/version")
+    version=$(etcd_api "/version" 2>/dev/null) || true
     local etcd_ver cluster_ver
     etcd_ver=$(echo "$version" | jq -r '.etcdserver // "?"' 2>/dev/null)
     cluster_ver=$(echo "$version" | jq -r '.etcdcluster // "?"' 2>/dev/null)
@@ -49,7 +50,8 @@ cmd_health() {
 
     # etcd process
     local etcd_pid
-    etcd_pid=$(pgrep -f "etcd " 2>/dev/null | head -1)
+    # Exact name: `pgrep -f "etcd "` also matched this script ("kdiag-etcd health")
+    etcd_pid=$(pgrep -x etcd 2>/dev/null | head -1) || true
     if [ -n "$etcd_pid" ]; then
         local etcd_mem
         etcd_mem=$(ps -p "$etcd_pid" -o rss= 2>/dev/null | awk '{printf "%.0f", $1/1024}')
@@ -69,7 +71,7 @@ cmd_members() {
     header "etcd Members"
 
     local members
-    members=$(etcd_api "/v3/cluster/member/list" -X POST -d '{}')
+    members=$(etcd_api "/v3/cluster/member/list" -X POST -d '{}') || return 0
 
     echo -e "  ${C_DIM}ID                   NAME                    PEER URL                          CLIENT URL${C_RESET}"
     echo "$members" | jq -r '.members[]? | "\(.ID // .id)\t\(.name)\t\(.peerURLs[0] // "?")\t\(.clientURLs[0] // "?")"' 2>/dev/null | \
@@ -79,7 +81,7 @@ cmd_members() {
 
     # Leader
     local status
-    status=$(etcd_api "/v3/maintenance/status" -X POST -d '{}')
+    status=$(etcd_api "/v3/maintenance/status" -X POST -d '{}') || return 0
     local leader_id
     leader_id=$(echo "$status" | jq -r '.leader // "?"' 2>/dev/null)
     local member_id
@@ -103,10 +105,14 @@ cmd_size() {
     header "etcd Database Size"
 
     local status
-    status=$(etcd_api "/v3/maintenance/status" -X POST -d '{}')
+    status=$(etcd_api "/v3/maintenance/status" -X POST -d '{}') || return 0
 
-    local db_size db_size_in_use raft_index raft_term
+    local db_size db_size_in_use raft_index raft_term quota
     db_size=$(echo "$status" | jq -r '.dbSize // .dbSizeInBytes // 0' 2>/dev/null)
+    # etcd 3.6+ reports its quota; 3.5 doesn't, so fall back to the built-in
+    # default --quota-backend-bytes (2 GiB). NOSPACE fires at the quota.
+    quota=$(echo "$status" | jq -r '.dbSizeQuota // 0' 2>/dev/null) || true
+    [ "${quota:-0}" -gt 0 ] 2>/dev/null || quota=2147483648
     db_size_in_use=$(echo "$status" | jq -r '.dbSizeInUse // 0' 2>/dev/null)
     raft_index=$(echo "$status" | jq -r '.raftIndex // .header.raft_term // "?"' 2>/dev/null)
     raft_term=$(echo "$status" | jq -r '.raftTerm // "?"' 2>/dev/null)
@@ -120,22 +126,22 @@ cmd_size() {
     echo -e "  Raft index:    ${raft_index}"
     echo -e "  Raft term:     ${raft_term}"
 
-    # Warn if large
-    if [ "$db_size" -gt 4294967296 ] 2>/dev/null; then
-        echo ""
-        fail "DB size > 4GB! Consider compaction + defrag"
-    elif [ "$db_size" -gt 2147483648 ] 2>/dev/null; then
-        echo ""
-        warn "DB size > 2GB — monitor growth"
-    fi
-
-    # Size gauge (max 8GB = etcd default limit)
-    local max_bytes=8589934592
-    local pct=$((db_size * 100 / max_bytes))
+    # Size gauge against the backend quota
+    local pct=0
+    [ "$db_size" -gt 0 ] 2>/dev/null && pct=$((db_size * 100 / quota))
     echo ""
     printf "  Quota usage: "
     pct_bar "$pct" 25
-    echo -e " ${C_DIM}(of 8 GB default)${C_RESET}"
+    echo -e " ${C_DIM}(of $(human_bytes $quota) quota)${C_RESET}"
+
+    # Warn before NOSPACE turns the cluster read-only
+    if [ "$pct" -ge 90 ]; then
+        echo ""
+        fail "DB at ${pct}% of quota — NOSPACE alarm (read-only cluster) at 100%. Compact + defrag now"
+    elif [ "$pct" -ge 70 ]; then
+        echo ""
+        warn "DB at ${pct}% of quota — monitor growth, plan compaction + defrag"
+    fi
 }
 
 cmd_alarms() {
@@ -148,7 +154,7 @@ cmd_alarms() {
     header "etcd Alarms"
 
     local alarms
-    alarms=$(etcd_api "/v3/maintenance/alarm" -X POST -d '{"action":"GET"}')
+    alarms=$(etcd_api "/v3/maintenance/alarm" -X POST -d '{"action":"GET"}') || return 0
 
     local alarm_list
     alarm_list=$(echo "$alarms" | jq -r '.alarms[]? | "\(.memberID // .member_id): \(.alarm)"' 2>/dev/null)
@@ -174,20 +180,24 @@ cmd_perf() {
 
     local start end
 
+    # Remove the test key and fsync file even on Ctrl+C or an early exit
+    local fsync_file="/host/var/lib/.ndiag-fsync-test.$$"
+    trap "etcd_api /v3/kv/deleterange -X POST -d '{\"key\":\"${test_key}\"}' >/dev/null 2>&1; rm -f '${fsync_file}'" EXIT
+
     # Write latency
     start=$(date +%s%N)
-    etcd_api "/v3/kv/put" -X POST -d "{\"key\":\"${test_key}\",\"value\":\"${test_val}\"}" >/dev/null
+    etcd_api "/v3/kv/put" -X POST -d "{\"key\":\"${test_key}\",\"value\":\"${test_val}\"}" >/dev/null || true
     end=$(date +%s%N)
     local write_ms=$(( (end - start) / 1000000 ))
 
     # Read latency
     start=$(date +%s%N)
-    etcd_api "/v3/kv/range" -X POST -d "{\"key\":\"${test_key}\"}" >/dev/null
+    etcd_api "/v3/kv/range" -X POST -d "{\"key\":\"${test_key}\"}" >/dev/null || true
     end=$(date +%s%N)
     local read_ms=$(( (end - start) / 1000000 ))
 
     # Cleanup
-    etcd_api "/v3/kv/deleterange" -X POST -d "{\"key\":\"${test_key}\"}" >/dev/null
+    etcd_api "/v3/kv/deleterange" -X POST -d "{\"key\":\"${test_key}\"}" >/dev/null || true
 
     local write_color="$C_GREEN"
     [ "$write_ms" -gt 50 ] && write_color="$C_YELLOW"
@@ -206,19 +216,32 @@ cmd_perf() {
         dim "Check: ndiag-disk io, ndiag-cpu load"
     fi
 
-    # Disk fsync latency via WAL directory
+    # Disk fsync latency on the WAL's filesystem. The test file sits next to the
+    # etcd data dir, never inside the live WAL dir. oflag=dsync syncs every 4K
+    # write like etcd's WAL does (conv=fdatasync only synced once at the end,
+    # which measured buffered throughput, not fsync latency).
     header "etcd WAL Disk (fsync test)"
     local wal_dir="/host/var/lib/etcd/member/wal"
     if [ -d "$wal_dir" ]; then
-        local fsync_result
-        fsync_result=$(dd if=/dev/zero of="${wal_dir}/_fsync_test" bs=4k count=256 conv=fdatasync 2>&1)
-        rm -f "${wal_dir}/_fsync_test"
-        local fsync_speed
-        fsync_speed=$(echo "$fsync_result" | grep -oP '[\d.]+ [MGKT]B/s' | tail -1)
-        echo -e "  WAL fsync: ${C_BOLD}${fsync_speed:-N/A}${C_RESET} (4K blocks, 1MB total)"
+        local fsync_result fsync_secs fsync_ms
+        fsync_result=$(dd if=/dev/zero of="$fsync_file" bs=4k count=256 oflag=dsync 2>&1) || true
+        rm -f "$fsync_file"
+        fsync_secs=$(echo "$fsync_result" | grep -oE 'copied, [0-9.]+ s' | grep -oE '[0-9.]+' | tail -1) || true
+        if [ -n "$fsync_secs" ]; then
+            fsync_ms=$(awk "BEGIN{printf \"%.2f\", ${fsync_secs} * 1000 / 256}")
+            local fsync_color="$C_GREEN"
+            awk "BEGIN{exit !(${fsync_ms} > 10)}" && fsync_color="$C_YELLOW"
+            awk "BEGIN{exit !(${fsync_ms} > 50)}" && fsync_color="$C_RED"
+            echo -e "  WAL fsync: ${fsync_color}${C_BOLD}${fsync_ms} ms${C_RESET} avg per synced 4K write (256 writes)"
+            dim "etcd wants WAL fsync < 10 ms (p99)"
+        else
+            echo -e "  WAL fsync: ${C_BOLD}N/A${C_RESET}"
+            echo "$fsync_result" | tail -1 | sed 's/^/    /'
+        fi
     else
         dim "WAL directory not found at ${wal_dir}"
     fi
+    trap - EXIT
 }
 
 cmd_keys() {
@@ -236,14 +259,14 @@ cmd_keys() {
         end_b64=$(echo -n "${prefix}0" | base64)  # range end: prefix + '0' (next char after '/')
 
         local count
-        count=$(etcd_api "/v3/kv/range" -X POST -d "{\"key\":\"${key_b64}\",\"range_end\":\"${end_b64}\",\"count_only\":true}" | jq -r '.count // 0' 2>/dev/null)
+        count=$(etcd_api "/v3/kv/range" -X POST -d "{\"key\":\"${key_b64}\",\"range_end\":\"${end_b64}\",\"count_only\":true}" | jq -r '.count // 0' 2>/dev/null) || count="?"
         printf "  %-30s  %5s\n" "$prefix" "$count"
     done
 
     # Total key count
     echo ""
     local total_keys
-    total_keys=$(etcd_api "/v3/kv/range" -X POST -d '{"key":"AA==","range_end":"//8=","count_only":true}' | jq -r '.count // "?"' 2>/dev/null)
+    total_keys=$(etcd_api "/v3/kv/range" -X POST -d '{"key":"AA==","range_end":"//8=","count_only":true}' | jq -r '.count // "?"' 2>/dev/null) || total_keys="?"
     echo -e "  ${C_BOLD}Total keys: ${total_keys}${C_RESET}"
 }
 
@@ -285,9 +308,10 @@ EXAMPLES
 
 NOTES
     - Only works on control plane nodes (needs etcd client certs)
-    - Uses /host/etc/kubernetes/pki/etcd/ for TLS
+    - Uses /host/system/secrets/etcd/ (Talos) or /host/etc/kubernetes/pki/etcd/ for TLS
     - perf writes a temporary test key and removes it
-    - Default etcd quota is 8 GB — alarm triggers at limit
+    - perf's fsync file goes next to the etcd data dir, not in the WAL dir
+    - Quota is read from etcd (3.6+), else the 2 GiB default — NOSPACE alarm at limit
 EOF
 }
 
