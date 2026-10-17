@@ -402,8 +402,14 @@ def parse_mountinfo(text: str) -> list[tuple[str, str, str]]:
         fs_type, source = tail[0], _unescape_mountinfo(tail[1])
         if fs_type in _DF_SKIP_TYPES:
             continue
+        # Nothing can fill a read-only mount, and some always read 100%:
+        # Talos' root is a read-only overlay of its image layers.
+        if "ro" in fields[5].split(","):
+            continue
         if fs_type == "overlay":
-            if overlay_seen:
+            # Container root filesystems: they only mirror the filesystem
+            # underneath. Keep "/" for the container's own view.
+            if overlay_seen or mount != "/":
                 continue
             overlay_seen = True
         # Bind mounts (kubelet volumes, Talos' /etc and /var binds) repeat
