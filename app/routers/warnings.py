@@ -2,6 +2,7 @@ import time
 
 from fastapi import APIRouter
 
+from app.collectors.base import in_host_network_namespace
 from app.collectors.dmesg import collect_dmesg_warnings
 from app.collectors.kubernetes import (
     collect_k8s_certificates,
@@ -83,6 +84,17 @@ async def get_warnings():
                 severity="warning",
                 source="dashboard",
                 message=f"Could not collect {name}; its warnings are missing",
+            )
+        )
+    if not in_host_network_namespace():
+        warnings.append(
+            NodeWarning(
+                severity="info",
+                source="dashboard",
+                message=(
+                    "hostNetwork is off: component health, etcd metrics and "
+                    "the node's DNS resolvers cannot be checked from the pod"
+                ),
             )
         )
     dmesg_warnings = r["dmesg"] or []

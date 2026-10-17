@@ -4,7 +4,12 @@ import os
 
 import httpx
 
-from app.collectors.base import read_file, run_command, ttl_cache
+from app.collectors.base import (
+    in_host_network_namespace,
+    read_file,
+    run_command,
+    ttl_cache,
+)
 from app.config import HOST_ROOT, HOST_SYS
 from app.httpclient import (
     bearer,
@@ -147,7 +152,11 @@ def _parse_default_gateway(stdout: str) -> str:
 @ttl_cache()
 async def collect_connectivity() -> dict:
     # DNS config
-    resolv = await read_file(f"{HOST_ROOT}/etc/resolv.conf")
+    # The host's resolvers, unless the pod has its own network namespace:
+    # then a host-local resolver such as 127.0.0.53 is unreachable from here
+    # and would always fail, so test the pod's own resolvers instead.
+    host_net = in_host_network_namespace()
+    resolv = await read_file(f"{HOST_ROOT if host_net else ''}/etc/resolv.conf")
     dns_servers = _parse_nameservers(resolv)
 
     # DNS resolution, against the host nameservers listed above. A bare

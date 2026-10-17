@@ -10,14 +10,15 @@ namespace and label it first:
 
 ```bash
 kubectl create ns node-debug
-kubectl label ns node-debug pod-security.kubernetes.io/enforce=privileged --overwrite
+kubectl label ns node-debug --overwrite \
+  pod-security.kubernetes.io/{enforce,audit,warn}=privileged
 ```
 
 Then install via OCI (Helm 3.8+):
 
 ```bash
 helm install ndd oci://ghcr.io/samr037/charts/node-debug-dashboard \
-  --version 0.4.1 \
+  --version 0.4.2 \
   -n node-debug
 ```
 

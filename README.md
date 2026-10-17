@@ -57,7 +57,8 @@ Dark, light and auto themes; 10-second auto-refresh that keeps your open section
 
 ```bash
 kubectl create ns node-debug
-kubectl label ns node-debug pod-security.kubernetes.io/enforce=privileged --overwrite
+kubectl label ns node-debug --overwrite \
+  pod-security.kubernetes.io/{enforce,audit,warn}=privileged
 ```
 
 **2. Install the chart** (Helm 3.8+):
@@ -419,7 +420,7 @@ Prefer a Secret you manage over a password in values:
 
 ```bash
 kubectl -n ndd create secret generic ndd-auth --from-literal=password='...'
-helm install ndd oci://ghcr.io/samr037/charts/node-debug-dashboard --version 0.4.1 \
+helm install ndd oci://ghcr.io/samr037/charts/node-debug-dashboard --version 0.4.2 \
   --namespace ndd \
   --set auth.existingSecret=ndd-auth --set auth.password=on \
   --set networkPolicy.enabled=true --set networkPolicy.allowedCIDRs={10.0.0.0/8}
