@@ -17,7 +17,7 @@ Then install via OCI (Helm 3.8+):
 
 ```bash
 helm install ndd oci://ghcr.io/samr037/charts/node-debug-dashboard \
-  --version 0.4.0 \
+  --version 0.4.1 \
   -n node-debug
 ```
 
