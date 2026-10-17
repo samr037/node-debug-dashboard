@@ -6,7 +6,7 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
-from app.config import CACHE_TTL, COMMAND_TIMEOUT
+from app.config import CACHE_TTL, COMMAND_TIMEOUT, HOST_PROC
 
 
 def _kill_group(proc: asyncio.subprocess.Process) -> None:
@@ -186,3 +186,16 @@ def ttl_cache(
         return wrapper
 
     return decorator
+
+
+def in_host_network_namespace() -> bool:
+    """Whether the pod shares the node's network namespace (hostNetwork).
+
+    Off host networking, localhost is the pod: component health endpoints,
+    etcd on 127.0.0.1 and the host's own resolver are out of reach. When the
+    host's namespace cannot be read, assume host networking (the default).
+    """
+    try:
+        return os.readlink("/proc/self/ns/net") == os.readlink(f"{HOST_PROC}/1/ns/net")
+    except OSError:
+        return True

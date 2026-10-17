@@ -746,7 +746,7 @@ function renderKubernetes(k8s) {
             k8s.components.map(c => [
                 c.name,
                 raw(c.running ? severityBadge('ok', 'Yes') : severityBadge('critical', 'No')),
-                raw(severityBadge(c.health_status === 'Healthy' ? 'ok' : c.health_status === 'Unknown' ? '' : 'critical', c.health_status)),
+                raw(severityBadge(c.health_status === 'Healthy' ? 'ok' : (c.health_status === 'Unknown' || c.health_status === 'Unavailable') ? '' : 'critical', c.health_status)),
                 c.uptime || '-'
             ])
         );

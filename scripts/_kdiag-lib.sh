@@ -112,7 +112,13 @@ etcd_api() {
         --key "$ETCD_KEY" \
         --cacert "$ETCD_CA" \
         "https://127.0.0.1:2379${path}" "$@" 2>/dev/null || rc=$?
-    [ "$rc" -eq 0 ] || fail "etcd unreachable: ${path} (curl exit ${rc})" >&2
+    if [ "$rc" -ne 0 ]; then
+        if [ "$(readlink /proc/self/ns/net)" != "$(readlink /host-proc/1/ns/net 2>/dev/null || readlink /proc/self/ns/net)" ]; then
+            fail "etcd unreachable: this pod is not on the host network (hostNetwork=false), so 127.0.0.1:2379 is the pod itself" >&2
+        else
+            fail "etcd unreachable: ${path} (curl exit ${rc})" >&2
+        fi
+    fi
     return "$rc"
 }
 

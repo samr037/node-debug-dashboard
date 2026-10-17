@@ -17,9 +17,11 @@ C_DIM="\033[2m"
 
 header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
 
+# A node booted in BIOS/CSM mode has no EFI to show: that is a fact about
+# the node, not a failure, so read-only views return 0 after saying so.
 _efi_available() {
     if [ ! -d "/sys/firmware/efi" ] && [ ! -d "/host/sys/firmware/efi" ]; then
-        echo -e "  ${C_RED}UEFI not available (system booted in BIOS/CSM mode or EFI not exposed)${C_RESET}"
+        echo -e "  ${C_YELLOW}UEFI not available (system booted in BIOS/CSM mode or EFI not exposed)${C_RESET}"
         return 1
     fi
     return 0
@@ -32,7 +34,7 @@ cmd_list() {
         return
     fi
 
-    _efi_available || return
+    _efi_available || return 0
 
     header "UEFI Boot Entries"
 
@@ -94,7 +96,7 @@ cmd_order() {
     local new_order="${1:-}"
     if [ -z "$new_order" ]; then
         # Show current order with labels
-        _efi_available || return
+        _efi_available || return 0
 
         header "Current Boot Order"
         local output
@@ -174,6 +176,7 @@ cmd_disable() {
 cmd_timeout() {
     local secs="${1:-}"
     if [ -z "$secs" ]; then
+        _efi_available || return 0
         local current
         current=$(efibootmgr 2>/dev/null | grep "^Timeout:" | sed 's/Timeout: *//')
         echo -e "  Current timeout: ${C_BOLD}${current}${C_RESET}"

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from app.collectors.base import run_command, ttl_cache
+from app.collectors.base import in_host_network_namespace, run_command, ttl_cache
 from app.config import HOST_ROOT, SSH_ENABLED, SSH_PASSWORD_AUTH, SSH_PORT
 from app.httpclient import (
     bearer,
@@ -338,6 +338,14 @@ async def collect_k8s_components() -> list[K8sComponentStatus]:
         "etcd": "https://localhost:2379/health",
         "kube-proxy": "http://localhost:10249/healthz",
     }
+
+    # These all listen on the node's loopback, which a pod without
+    # hostNetwork cannot reach: say so instead of reporting them Unknown.
+    if not in_host_network_namespace():
+        return [
+            K8sComponentStatus(name=name, running=False, health_status="Unavailable")
+            for name in components
+        ]
 
     # The API server rejects anonymous requests to /healthz with a 401, so
     # an unauthenticated probe reported it permanently Unhealthy on a

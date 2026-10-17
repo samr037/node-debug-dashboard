@@ -100,6 +100,9 @@ _confirm() {
 # Print memtester results; non-zero if errors found or memtester did not finish
 _memtester_report() {
     local result="$1" rc="$2"
+    # memtester draws its progress with backspaces; replay them so a
+    # captured (non-tty) run prints "Walking Ones : ok", not the spinner.
+    result=$(printf '%s\n' "$result" | sed -e ':a' -e 's/[^\x08]\x08//' -e 'ta')
     local errors
     errors=$(echo "$result" | grep -c "FAILURE" 2>/dev/null) || errors=0
     echo "$result" | grep -E "Loop|Stuck|ok|FAILURE" | sed 's/^/  /' || true
