@@ -16,7 +16,7 @@ Hardware, storage, Kubernetes and container diagnostics for every node, as a web
 
 [Quick start](#quick-start) · [Features](#features) · [Screenshots](#screenshots) · [SSH shell](docs/ssh.md) · [API](#api-reference) · [Security](#security)
 
-<a href="docs/media/ndd-demo.mp4"><img src="docs/media/ndd-demo.gif" alt="Node Debug Dashboard demo: a Talos node refusing SSH, a helm install, the dashboard flagging a failing NVMe drive, and the kdiag-etcd shell script" width="860"></a>
+<a href="docs/media/ndd-demo.mp4"><img src="docs/media/ndd-demo.gif" alt="Node Debug Dashboard demo: a Talos node refusing SSH, a helm install, the dashboard flagging a failing NVMe drive, the kdiag-etcd shell script and the same drive as JSON from the REST API" width="860"></a>
 
 <sub>The demo uses fictional data. [MP4 version](docs/media/ndd-demo.mp4) · source in [docs/video](docs/video/index.html)</sub>
 
