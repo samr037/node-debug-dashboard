@@ -205,6 +205,8 @@ spec:
         app: node-debug-dashboard
     spec:
       hostNetwork: true
+      # The node's resolv.conf cannot resolve kubernetes.default.svc.
+      dnsPolicy: ClusterFirstWithHostNet
       hostPID: true
       hostIPC: true
       serviceAccountName: node-debug-dashboard
@@ -231,6 +233,11 @@ spec:
               value: "false"
             - name: SSH_AUTHORIZED_KEYS
               value: "ssh-ed25519 AAAA... user@host"
+            # Dashboard login (HTTP Basic as "debug"); see Security below.
+            # kubectl create secret generic ndd-auth --from-literal=password=...
+            - name: AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: ndd-auth, key: password }
           volumeMounts:
             - name: host-root
               mountPath: /host
@@ -246,7 +253,7 @@ spec:
 
 Then access `http://<node-ip>/` for the dashboard, `http://<node-ip>/docs` for Swagger.
 
-> **Note:** Create a ServiceAccount with `get`/`list` permissions on `nodes`, `pods`, `services`, `endpoints`, and `events` for the Kubernetes diagnostics and SSH `kdiag-*` scripts.
+> **Note:** Create a ServiceAccount bound to a ClusterRole matching the chart's: `get`/`list`/`watch` on core `nodes`, `pods`, `services`, `endpoints` and `events`, plus `get`/`list` on `metrics.k8s.io` `nodes` and `pods`. Do not grant `nodes/proxy` (the kubelet authorizes exec through it) or anything broader. The Helm chart (`charts/node-debug-dashboard`) creates all of this for you.
 
 ### Docker (standalone)
 
@@ -292,46 +299,85 @@ docker run --privileged --net=host --pid=host \
 | `/api/containers/system` | GET | Talos system services |
 | `/api/containers/workloads` | GET | K8s workload containers |
 | `/api/containers/{id}/logs` | WS | Live log stream (WebSocket) |
-| `/api/processes` | GET | Top 200 processes by memory |
+| `/api/processes` | GET | Top 200 processes by memory plus up to 50 top CPU consumers; credentials in command lines are masked |
 | `/api/warnings` | GET | Aggregated warnings |
 | `/api/health` | GET | Health check for K8s probes |
 | `/docs` | GET | Swagger UI |
+
+Partial failures: `/api/overview`, `/api/sections/hardware` and
+`/api/sections/network` gather several collectors and return whatever
+succeeded. A failed collector leaves its field `null` (objects) or `[]`
+(lists), and its name is listed in an `"errors"` array in the response.
+A section backed by a single collector (`/api/sections/node`, `storage`,
+...) has nothing partial to return and answers **503** instead of a 500;
+so does `/api/hardware` when CPU or memory cannot be read. `/api/warnings`
+reports a failed source as a warning with `source: "dashboard"`.
+
+The log WebSocket (`/api/containers/{id}/logs`) only accepts a full
+64-character container ID (no prefixes, which crictl would resolve) and
+refuses cross-origin browser handshakes.
 
 ## Configuration
 
 | Environment Variable | Default | Description |
 |---|---|---|
+| `HTTP_PORT` | `80` | Port the dashboard listens on (entrypoint) |
 | `HOST_ROOT` | `/host` | Host root filesystem mount path |
 | `HOST_PROC` | `/host-proc` | Host /proc mount path |
 | `HOST_SYS` | `/sys` | Host /sys path (already the host's under `privileged`) |
 | `CACHE_TTL` | `10` | Default collector cache TTL in seconds |
 | `COMMAND_TIMEOUT` | `10` | Subprocess timeout in seconds |
 | `DMESG_WINDOW_HOURS` | `168` | How far back to scan the kernel ring buffer for faults |
+| `COUNTER_WINDOW_HOURS` | `24` | NIC CRC/carrier and ECC counters are warning/critical only while they have increased within this window, `info` otherwise |
 | `KUBERNETES_NODE_NAME` | — | Node name (set via fieldRef in K8s) |
-| `AUTH_TOKEN` | — | If set, require `Authorization: Bearer <token>` |
+| `AUTH_TOKEN` | — | If set, require `Authorization: Bearer <token>` (scripts only: a browser cannot send it) |
 | `AUTH_USERNAME` | `debug` | Username for HTTP Basic auth |
-| `AUTH_PASSWORD` | — | If set, require HTTP Basic auth |
+| `AUTH_PASSWORD` | — | If set, require HTTP Basic auth; this is what the browser UI prompts for |
 | `SSH_ENABLED` | `false` | Enable/disable the SSH server |
 | `SSH_PORT` | `2022` | SSH listen port |
 | `SSH_PASSWORD_AUTH` | `false` | Enable/disable password authentication (requires `SSH_PASSWORD`) |
 | `SSH_PASSWORD` | — | Password for the `debug` user; accounts ship locked without it |
 | `SSH_AUTHORIZED_KEYS` | — | Newline-separated public keys for SSH access |
+| `SSH_HOST_KEY_DIR` | `/var/lib/node-debug-dashboard/ssh` | Where SSH host keys are kept when that directory exists (mount a hostPath there for stable per-node host keys; the chart does with `ssh.persistHostKeys`) |
+
+Boolean variables (`SSH_ENABLED`, `SSH_PASSWORD_AUTH`) accept `1`, `true`,
+`yes` or `on` in any case, with surrounding whitespace ignored; anything else
+is false. Credentials read from the environment are stripped of surrounding
+whitespace (a Secret made with `--from-file` usually ends in a newline).
 
 ### Security
 
-**The dashboard is unauthenticated unless you configure it.** It runs with
+**The app is unauthenticated unless you configure it.** It runs with
 `hostNetwork`, so it binds a port on the node's own address and anything that
 can route to the node can read its process table, container inventory,
-certificate details and hardware. Set `AUTH_PASSWORD` (HTTP Basic, so a
-browser will prompt) or `AUTH_TOKEN` (bearer, for scripts), and pair it with a
-NetworkPolicy — the chart ships one, off by default. `/api/health` stays open
-so the kubelet can still probe it.
+certificate details and hardware. Set `AUTH_PASSWORD` (HTTP Basic: this is
+what the browser UI prompts for) and/or `AUTH_TOKEN` (bearer, for scripts
+only; a browser cannot send it). `/api/health` stays open so the kubelet can
+still probe it.
+
+The Helm chart closes the default: with no `auth.token`, `auth.password` or
+`auth.existingSecret`, `helm install`/`helm upgrade` generate a random
+password (kept across upgrades) and NOTES.txt shows how to read it.
+`helm template` (Argo CD, Flux) cannot keep a generated value, so it renders
+with auth off: set `auth.existingSecret` there. `auth.disabled=true` opts out
+explicitly.
+
+Prefer a Secret you manage over a password in values:
 
 ```bash
-helm install ndd . \
-  --set auth.password=... \
-  --set networkPolicy.enabled=true
+kubectl -n ndd create secret generic ndd-auth --from-literal=password='...'
+helm install ndd oci://ghcr.io/samr037/charts/node-debug-dashboard --version 0.4.0 \
+  --namespace ndd \
+  --set auth.existingSecret=ndd-auth --set auth.password=on \
+  --set networkPolicy.enabled=true --set networkPolicy.allowedCIDRs={10.0.0.0/8}
 ```
+
+(`auth.password=on` only selects which key of the existing Secret to wire.)
+A NetworkPolicy needs `allowedCIDRs` and/or `allowedNamespaces`, or the
+chart refuses to render. **It has no effect while `hostNetwork=true`** (the
+default): CNIs do not enforce NetworkPolicy on host-network pods. Filter at
+the host instead — Talos `NetworkRuleConfig`, Cilium host policies — or with
+an upstream ACL.
 
 Both accounts in the image ship locked, and the `debug` user has passwordless `sudo`. SSH is off by default; if you turn it on, use key-based auth.
 
@@ -360,12 +406,20 @@ pip install -r requirements.txt
 # Run locally (limited functionality without host mounts)
 uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 
-# Lint
-ruff check app/ && ruff format --check app/
+# Lint and test (what CI runs, and what gates a v* release)
+pip install -r requirements-dev.txt
+ruff check app/ tests/ && ruff format --check app/ tests/
+pytest -q
 
 # Build container
 docker build -t node-debug-dashboard .
 ```
+
+`requirements.txt` and `requirements-dev.txt` are uv-generated, fully hashed
+locks (pip switches to `--require-hashes` mode on its own). Edit the ranges in
+the `requirements.txt` header and regenerate **both** files together with the
+`uv pip compile --universal --generate-hashes` command given there; CI checks
+that the dev lock pins the same runtime versions.
 
 ## Project Structure
 
