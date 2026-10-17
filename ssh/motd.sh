@@ -50,8 +50,13 @@ NODE_IPS=$(ip -4 addr show 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | aw
 
 # Kubernetes
 K8S_NODE="${KUBERNETES_NODE_NAME:-unknown}"
+# No glob here: this file is sourced by zsh, where an unmatched etcd* aborts
+# with "no matches found" at every login. /var/lib/etcd covers Talos, where
+# etcd is a machined service rather than a static-pod manifest.
 K8S_ROLE="worker"
-if [ -f /host/etc/kubernetes/manifests/kube-apiserver.yaml ] || [ -d /host/etc/kubernetes/manifests ] && ls /host/etc/kubernetes/manifests/etcd* &>/dev/null; then
+if [ -f /host/etc/kubernetes/manifests/kube-apiserver.yaml ] \
+    || [ -d /host/var/lib/etcd ] \
+    || [ -n "$(find /host/etc/kubernetes/manifests -maxdepth 1 -name 'etcd*' 2>/dev/null)" ]; then
     K8S_ROLE="control-plane"
 fi
 
@@ -64,6 +69,10 @@ fi
 # Dashboard URL — prefer 192.168.x IPs over link-local/pod CIDRs
 DASH_IP=$(ip -4 addr show 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d/ -f1 | grep '^192\.168\.' | head -1)
 [ -z "$DASH_IP" ] && DASH_IP=$(ip -4 addr show 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | grep -v '169.254' | grep -v '10.244' | awk '{print $2}' | cut -d/ -f1 | head -1)
+
+# HTTP_PORT reaches SSH sessions via /etc/environment (entrypoint.sh)
+DASH_PORT=""
+[ -n "$HTTP_PORT" ] && [ "$HTTP_PORT" != "80" ] && DASH_PORT=":${HTTP_PORT}"
 
 # Print node info
 echo -e "${C_BOLD}${C_CYAN}  Node${C_RESET}        ${C_WHITE}${HOSTNAME}${C_RESET} ${C_DIM}(${K8S_NODE})${C_RESET}"
@@ -98,8 +107,8 @@ echo -e "  ${C_YELLOW}cps${C_RESET}             List running containers (crictl)
 echo -e "  ${C_YELLOW}kn${C_RESET}              Cluster nodes"
 echo -e "  ${C_YELLOW}kp${C_RESET}              All pods"
 echo ""
-echo -e "  ${C_MAGENTA}Dashboard${C_RESET}     ${C_BLUE}http://${DASH_IP:-<node-ip>}/${C_RESET}"
-echo -e "  ${C_MAGENTA}API Docs${C_RESET}      ${C_BLUE}http://${DASH_IP:-<node-ip>}/docs${C_RESET}"
+echo -e "  ${C_MAGENTA}Dashboard${C_RESET}     ${C_BLUE}http://${DASH_IP:-<node-ip>}${DASH_PORT}/${C_RESET}"
+echo -e "  ${C_MAGENTA}API Docs${C_RESET}      ${C_BLUE}http://${DASH_IP:-<node-ip>}${DASH_PORT}/docs${C_RESET}"
 echo -e "  ${C_MAGENTA}SSH Docs${C_RESET}      ${C_BLUE}https://github.com/samr037/node-debug-dashboard/blob/main/docs/ssh.md${C_RESET}"
 echo ""
 echo -e "  ${C_DIM}Type 'help' for the full guide, 'ndiag-test' to run all tests${C_RESET}"

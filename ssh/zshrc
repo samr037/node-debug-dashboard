@@ -83,16 +83,21 @@ alias cstats='crictl stats'
 alias cexec='crictl exec -it'
 
 # ─── Kubernetes (via curl + SA token) ───
+# Not `local path`: in zsh, $path is tied to $PATH, so that set PATH to the
+# API path and curl/cat were "command not found" (kn/kp/kpn printed nothing).
+# The token goes to curl as a header file on stdin (printf is a builtin), so
+# it never shows up on a command line in ps or /api/processes.
 _k8s_curl() {
-    local path="$1"; shift
-    command curl -sk --max-time 10 \
-        --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
-        -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null)" \
-        "https://kubernetes.default.svc${path}" "$@"
+    local api_path="$1"; shift
+    local sa=/var/run/secrets/kubernetes.io/serviceaccount
+    printf 'Authorization: Bearer %s\n' "$(<$sa/token)" |
+        command curl -sk --max-time 10 -H @- \
+            --cacert $sa/ca.crt \
+            "https://kubernetes.default.svc${api_path}" "$@"
 }
 alias kn='_k8s_curl /api/v1/nodes 2>/dev/null | jq -r ".items[] | \"\(.metadata.name)\t\(.status.conditions[-1].type)=\(.status.conditions[-1].status)\""'
 alias kp='_k8s_curl /api/v1/pods 2>/dev/null | jq -r ".items[] | \"\(.metadata.namespace)\t\(.metadata.name)\t\(.status.phase)\""'
-alias kpn='_k8s_curl "/api/v1/pods?fieldSelector=spec.nodeName=${KUBERNETES_NODE_NAME}" 2>/dev/null | jq -r ".items[] | \"\(.metadata.namespace)\t\(.metadata.name)\t\(.status.phase)\""'
+alias kpn='_k8s_curl "/api/v1/pods?fieldSelector=spec.nodeName=${KUBERNETES_NODE_NAME:-$(hostname)}" 2>/dev/null | jq -r ".items[] | \"\(.metadata.namespace)\t\(.metadata.name)\t\(.status.phase)\""'
 alias kevents='_k8s_curl /api/v1/events 2>/dev/null | jq -r ".items | sort_by(.lastTimestamp) | .[-20:] | .[] | \"\(.lastTimestamp)\t\(.involvedObject.kind)/\(.involvedObject.name)\t\(.reason)\t\(.message[0:80])\""'
 
 # ─── Networking ───
@@ -275,13 +280,15 @@ help-ndiag() {
     echo "  check DEV  Read-only fsck"
     echo "  badblocks DEV  Read-only surface scan"
     echo "  smart-test DEV [short|long]  SMART self-test"
-    echo "  repair DEV  Repair (MUST be unmounted!)"
+    echo "  repair DEV  Repair (MUST be unmounted!; asks you to type DEV)"
+    echo "  --yes, -y  Before the subcommand: skip that prompt (ndiag-fsck --yes repair /dev/sdX)"
     echo ""
     echo -e "\033[1mndiag-memtest\033[0m"
     echo "  ecc        Check ECC status + kernel errors (instant)"
     echo "  quick [MB] Quick memtester (default 256MB)"
     echo "  stress [MB] [sec]  Stress test with stress-ng"
     echo "  full       Full RAM test (WARNING: very slow)"
+    echo "  --yes, -y  Before the subcommand: skip the y/N prompt of stress/full (ndiag-memtest --yes full)"
     echo ""
     echo -e "\033[1mndiag-efi\033[0m  \033[2m(UEFI boot management)\033[0m"
     echo "  list       All boot entries with status"
