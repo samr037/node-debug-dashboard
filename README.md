@@ -419,7 +419,7 @@ Prefer a Secret you manage over a password in values:
 
 ```bash
 kubectl -n ndd create secret generic ndd-auth --from-literal=password='...'
-helm install ndd oci://ghcr.io/samr037/charts/node-debug-dashboard --version 0.4.0 \
+helm install ndd oci://ghcr.io/samr037/charts/node-debug-dashboard --version 0.4.1 \
   --namespace ndd \
   --set auth.existingSecret=ndd-auth --set auth.password=on \
   --set networkPolicy.enabled=true --set networkPolicy.allowedCIDRs={10.0.0.0/8}
