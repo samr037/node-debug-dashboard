@@ -1,4 +1,7 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- if not (or .Values.networkPolicy.allowedCIDRs .Values.networkPolicy.allowedNamespaces) }}
+{{- fail "networkPolicy.enabled=true needs networkPolicy.allowedCIDRs and/or networkPolicy.allowedNamespaces; with neither, the policy denies all ingress" }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -36,5 +39,9 @@ spec:
       ports:
         - protocol: TCP
           port: {{ $.Values.httpPort }}
+        {{- if $.Values.ssh.enabled }}
+        - protocol: TCP
+          port: {{ $.Values.ssh.port }}
+        {{- end }}
     {{- end }}
 {{- end }}

@@ -13,19 +13,33 @@ fullnameOverride: ""
 # Host port for the dashboard / REST API (uses hostNetwork).
 httpPort: 80
 
-# Dashboard authentication. Unset means no authentication, which combined
-# with hostNetwork leaves a full read of the node open to anything that can
-# route to it. Set one of these, and prefer existingSecret over putting a
-# credential in values.
+# Dashboard authentication. Combined with hostNetwork, an open dashboard is
+# a full read of the node for anything that can route to it. Set one of
+# these, and prefer existingSecret over putting a credential in values.
 #
-#   token     "Authorization: Bearer <token>", for scripts
-#   password  HTTP Basic, so a browser prompts for it
+#   token     "Authorization: Bearer <token>", for scripts only
+#   password  HTTP Basic, so a browser prompts for it (the web UI needs this)
+#
+# With none of token, password or existingSecret set, `helm install` /
+# `helm upgrade` generate a random password (kept across upgrades) into the
+# chart-managed Secret; NOTES.txt prints how to read it. `helm template`
+# (Argo CD, Flux) cannot do that, as it has no cluster to keep the value in,
+# so it renders with auth off: use existingSecret there.
+#
+# Values set here are stored in a chart-managed Secret, never inline in the
+# pod spec. Pass numeric-looking values with --set-string or quoted in YAML.
 auth:
+  # Explicitly serve the dashboard without authentication (no generated
+  # password). Only for a node network nobody else can reach.
+  disabled: false
   username: debug
   token: ""
   password: ""
-  # Source the values from an existing Secret instead. When set, token and
-  # password above act as switches for which keys to wire up.
+  # Source the values from an existing Secret instead. Alone, it wires both
+  # tokenKey and passwordKey, which must then exist in the Secret (a missing
+  # key or Secret keeps the pod from starting rather than serving it open).
+  # Set token and/or password to any non-empty value to wire only those keys,
+  # or blank a key name to skip it.
   existingSecret: ""
   tokenKey: token
   passwordKey: password
@@ -34,13 +48,22 @@ auth:
 # application default of one week.
 dmesgWindowHours: ""
 
+# NIC CRC/carrier and EDAC ECC counters only reset on reboot. A counter is
+# warning/critical only while it has gone up within this many hours, and
+# info after that. Empty uses the application default of 24.
+counterWindowHours: ""
+
 # Restrict who can reach the dashboard. Off by default because it needs
 # CIDRs only you know, and because a policy with no rules would silently
 # black-hole a working install.
 #
-# Note this constrains pod-network traffic. With hostNetwork the listener is
-# also on the node's own address, where CNI policy does not apply — a host
-# firewall or an upstream ACL is what covers that path.
+# Enabling it with both lists empty fails the render instead.
+#
+# With hostNetwork (the default) this policy has no effect: the pod's address
+# is the node's, and CNIs (Flannel, Calico, Cilium without host policies) do
+# not enforce NetworkPolicy on host-network pods. Use a host firewall (Talos
+# NetworkRuleConfig, Cilium host policies) or an upstream ACL there; rely on
+# auth above for the dashboard itself.
 networkPolicy:
   enabled: false
   # e.g. ["10.0.0.0/8", "192.168.1.0/24"]
@@ -59,10 +82,20 @@ ssh:
   #   ssh-rsa AAAA... other@host
   authorizedKeys: ""
   # Required if passwordAuth is true — the image ships both accounts locked,
-  # so there is no default password to fall back on.
+  # so there is no default password to fall back on. Without one, the
+  # entrypoint keeps password auth off. Stored in the chart-managed Secret.
   password: ""
+  # Or source it from an existing Secret (used when passwordAuth is true).
+  existingSecret: ""
+  passwordKey: password
+  # Keep each node's SSH host keys in a hostPath, so clients do not hit a
+  # "host key changed" warning after every pod restart or upgrade. Off, each
+  # pod generates fresh keys on start (safe, but noisy for known_hosts).
+  persistHostKeys: true
+  hostKeyPath: /var/lib/node-debug-dashboard/ssh
 
-# Required for hardware, Kubernetes, and etcd diagnostics.
+# Required for hardware, Kubernetes, and etcd diagnostics. When false, the
+# http (and ssh) ports are published as hostPorts instead.
 hostNetwork: true
 
 # Left empty, this follows hostNetwork: ClusterFirstWithHostNet when host
@@ -77,13 +110,13 @@ hostRootMount: true
 
 # Mount the host's /dev and /sys explicitly. A privileged container already
 # sees both, so this is belt-and-braces rather than strictly required — but
-# it makes the dependency visible, and matches the reference DaemonSet in
-# the README, which the chart otherwise quietly diverged from.
+# it makes the dependency visible.
 hostDevMount: true
 hostSysMount: true
 
-# Read-only access on nodes, pods, services, endpoints, events.
-# Used by the Kubernetes section and kdiag-* scripts.
+# Read-only access on nodes, pods, services, endpoints, events, plus
+# metrics.k8s.io. Used by the Kubernetes section and kdiag-* scripts.
+# With create=false, name is required when rbac.create is true.
 serviceAccount:
   create: true
   name: ""
@@ -110,6 +143,28 @@ resources:
   limits:
     cpu: "1"
     memory: 1Gi
+
+# Probes on /api/health, which stays reachable without credentials when
+# auth is on. Set either to {} to drop it.
+#
+# sshd needs no probe of its own: with ssh.enabled the entrypoint supervises
+# it and exits (restarting the container) when sshd dies. A container has a
+# single livenessProbe; to watch sshd instead of HTTP, use
+#   livenessProbe: {tcpSocket: {port: ssh}, periodSeconds: 30}
+livenessProbe:
+  httpGet:
+    path: /api/health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 6
+readinessProbe:
+  httpGet:
+    path: /api/health
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 3
 
 priorityClassName: ""
 

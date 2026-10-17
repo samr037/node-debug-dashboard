@@ -1,3 +1,4 @@
+{{- $secretData := include "node-debug-dashboard.secretData" . | fromYaml }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -15,9 +16,15 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.podAnnotations }}
+      {{- if or .Values.podAnnotations $secretData }}
       annotations:
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $secretData }}
+        # Env from a Secret does not restart pods on change; this does.
+        checksum/credentials: {{ toYaml $secretData | sha256sum }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "node-debug-dashboard.serviceAccountName" . }}
@@ -56,12 +63,20 @@ spec:
           securityContext:
             privileged: {{ .Values.privileged }}
           ports:
+            # Without hostNetwork the pod only listens on its pod IP; hostPort
+            # keeps it reachable on the node address that NOTES points to.
             - name: http
               containerPort: {{ .Values.httpPort }}
+              {{- if not .Values.hostNetwork }}
+              hostPort: {{ .Values.httpPort }}
+              {{- end }}
               protocol: TCP
             {{- if .Values.ssh.enabled }}
             - name: ssh
               containerPort: {{ .Values.ssh.port }}
+              {{- if not .Values.hostNetwork }}
+              hostPort: {{ .Values.ssh.port }}
+              {{- end }}
               protocol: TCP
             {{- end }}
           env:
@@ -82,49 +97,99 @@ spec:
               value: |
                 {{- . | nindent 16 }}
             {{- end }}
-            {{- with .Values.ssh.password }}
+            {{- if and .Values.ssh.existingSecret .Values.ssh.enabled .Values.ssh.passwordAuth }}
             - name: SSH_PASSWORD
-              value: {{ . | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ssh.existingSecret }}
+                  key: {{ .Values.ssh.passwordKey }}
+            {{- else if hasKey $secretData "ssh-password" }}
+            - name: SSH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "node-debug-dashboard.secretName" . }}
+                  key: ssh-password
             {{- end }}
             {{- if .Values.dmesgWindowHours }}
             - name: DMESG_WINDOW_HOURS
               value: {{ .Values.dmesgWindowHours | quote }}
             {{- end }}
-            {{- if or .Values.auth.token .Values.auth.password }}
-            - name: AUTH_USERNAME
-              value: {{ .Values.auth.username | quote }}
-            {{- if .Values.auth.existingSecret }}
-            {{- if .Values.auth.token }}
-            - name: AUTH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.auth.existingSecret }}
-                  key: {{ .Values.auth.tokenKey }}
+            {{- if .Values.counterWindowHours }}
+            - name: COUNTER_WINDOW_HOURS
+              value: {{ .Values.counterWindowHours | quote }}
             {{- end }}
-            {{- if .Values.auth.password }}
-            - name: AUTH_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.auth.existingSecret }}
-                  key: {{ .Values.auth.passwordKey }}
+            {{- if and .Values.ssh.enabled .Values.ssh.persistHostKeys }}
+            - name: SSH_HOST_KEY_DIR
+              value: {{ .Values.ssh.hostKeyPath | quote }}
+            {{- end }}
+            {{- /*
+              Credentials always come from a Secret: either auth.existingSecret,
+              or the chart-managed one built from auth.token / auth.password.
+              With existingSecret, token/password act as switches for which keys
+              to wire; with neither switch set, both keys are wired (and must
+              exist, so a typo fails the pod instead of serving it open).
+            */}}
+            {{- $token := include "node-debug-dashboard.str" .Values.auth.token }}
+            {{- $password := include "node-debug-dashboard.str" .Values.auth.password }}
+            {{- $authSource := "" }}
+            {{- $tokenKey := "" }}
+            {{- $passwordKey := "" }}
+            {{- if .Values.auth.existingSecret }}
+            {{- $authSource = .Values.auth.existingSecret }}
+            {{- $anySwitch := or $token $password }}
+            {{- if and .Values.auth.tokenKey (or $token (not $anySwitch)) }}
+            {{- $tokenKey = .Values.auth.tokenKey }}
+            {{- end }}
+            {{- if and .Values.auth.passwordKey (or $password (not $anySwitch)) }}
+            {{- $passwordKey = .Values.auth.passwordKey }}
+            {{- end }}
+            {{- if not (or $tokenKey $passwordKey) }}
+            {{- fail "auth.existingSecret is set but neither auth.tokenKey nor auth.passwordKey is wired" }}
             {{- end }}
             {{- else }}
-            {{- with .Values.auth.token }}
+            {{- $authSource = include "node-debug-dashboard.secretName" . }}
+            {{- if hasKey $secretData "auth-token" }}{{ $tokenKey = "auth-token" }}{{ end }}
+            {{- if hasKey $secretData "auth-password" }}{{ $passwordKey = "auth-password" }}{{ end }}
+            {{- end }}
+            {{- if or $tokenKey $passwordKey }}
+            - name: AUTH_USERNAME
+              value: {{ .Values.auth.username | quote }}
+            {{- with $tokenKey }}
             - name: AUTH_TOKEN
-              value: {{ . | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $authSource }}
+                  key: {{ . }}
             {{- end }}
-            {{- with .Values.auth.password }}
+            {{- with $passwordKey }}
             - name: AUTH_PASSWORD
-              value: {{ . | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $authSource }}
+                  key: {{ . }}
             {{- end }}
             {{- end }}
-            {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             {{- if .Values.hostRootMount }}
             - name: host-root
               mountPath: /host
+              # Mounts the host makes after the pod starts (CSI / Longhorn
+              # volumes) show up under /host too, for lsblk/findmnt.
+              mountPropagation: HostToContainer
+            {{- end }}
+            {{- if and .Values.ssh.enabled .Values.ssh.persistHostKeys }}
+            - name: ssh-host-keys
+              mountPath: {{ .Values.ssh.hostKeyPath }}
             {{- end }}
             - name: host-proc
               mountPath: /host-proc
@@ -138,6 +203,12 @@ spec:
               mountPath: /sys
             {{- end }}
       volumes:
+        {{- if and .Values.ssh.enabled .Values.ssh.persistHostKeys }}
+        - name: ssh-host-keys
+          hostPath:
+            path: {{ .Values.ssh.hostKeyPath }}
+            type: DirectoryOrCreate
+        {{- end }}
         {{- if .Values.hostRootMount }}
         - name: host-root
           hostPath:

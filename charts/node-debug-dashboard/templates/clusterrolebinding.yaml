@@ -1,14 +1,17 @@
 {{- if .Values.rbac.create -}}
+{{- if and (not .Values.serviceAccount.create) (not .Values.serviceAccount.name) }}
+{{- fail "serviceAccount.name is required when serviceAccount.create=false and rbac.create=true (otherwise the cluster-wide role would be bound to the namespace's default ServiceAccount)" }}
+{{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "node-debug-dashboard.fullname" . }}
+  name: {{ include "node-debug-dashboard.clusterName" . }}
   labels:
     {{- include "node-debug-dashboard.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "node-debug-dashboard.fullname" . }}
+  name: {{ include "node-debug-dashboard.clusterName" . }}
 subjects:
   - kind: ServiceAccount
     name: {{ include "node-debug-dashboard.serviceAccountName" . }}
