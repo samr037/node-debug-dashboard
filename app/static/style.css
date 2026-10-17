@@ -509,6 +509,7 @@ tr:hover td {
 .sev-warning { color: var(--yellow); }
 .sev-critical { color: var(--red); }
 .sev-unknown { color: var(--text-dim); }
+.sev-info { color: var(--blue); }
 
 /* Table cell variants, previously inline styles on generated markup. */
 .cmd-cell {
