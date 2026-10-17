@@ -6,6 +6,7 @@ Skipped when helm is not on PATH. Nothing here talks to a cluster.
 import base64
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -223,14 +224,31 @@ def test_host_port_only_without_host_network():
 # --- NOTES ---------------------------------------------------------------------
 
 
+# helm 3 needs a cluster even for `install --dry-run=client`, so render
+# NOTES.txt through a wrapper template in a copy of the chart instead.
+_NOTES_WRAPPER = """apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notes-under-test
+data:
+  notes: |
+{{ include "node-debug-dashboard/templates/NOTES.txt" . | indent 4 }}
+"""
+
+
 def _notes(*args: str) -> str:
-    proc = subprocess.run(
-        ["helm", "install", "r", str(CHART), "-n", "ns", "--dry-run=client", *args],
-        capture_output=True,
-        text=True,
-    )
+    with tempfile.TemporaryDirectory() as tmp:
+        chart = Path(tmp) / CHART.name
+        shutil.copytree(CHART, chart)
+        (chart / "templates" / "zz-notes.yaml").write_text(_NOTES_WRAPPER)
+        proc = subprocess.run(
+            ["helm", "template", "r", str(chart), "-n", "ns"]
+            + ["--show-only", "templates/zz-notes.yaml", *args],
+            capture_output=True,
+            text=True,
+        )
     assert proc.returncode == 0, proc.stderr
-    return proc.stdout.split("NOTES:", 1)[1]
+    return yaml.safe_load(proc.stdout)["data"]["notes"]
 
 
 def test_notes_no_default_passwords_and_auth_state():
