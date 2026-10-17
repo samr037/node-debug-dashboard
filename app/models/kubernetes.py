@@ -52,6 +52,9 @@ class EtcdStatus(BaseModel):
     db_size_mb: float = 0
     db_size_in_use_mb: float = 0
     db_size_quota_mb: float = 0
+    # True when etcd did not report its quota (etcd 3.5) and the 2 GiB
+    # default --quota-backend-bytes was assumed.
+    quota_assumed: bool = False
     quota_used_percent: float = 0
     # Space held by etcd but no longer in use. Reclaimed by a defrag; if it
     # grows until db_size reaches the quota, etcd goes read-only.
