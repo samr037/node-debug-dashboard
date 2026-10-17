@@ -26,24 +26,47 @@ def auth_configured() -> bool:
     return bool(AUTH_TOKEN or AUTH_PASSWORD)
 
 
+def _same(a: str, b: str) -> bool:
+    # compare_digest raises TypeError on non-ASCII str, which turned any
+    # accented credential into a 500. Bytes have no such restriction.
+    return secrets.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
+def _split_scheme(header: str) -> tuple[str, str]:
+    # Auth schemes are case-insensitive (RFC 7235), and any whitespace may
+    # separate the scheme from the credentials.
+    parts = header.strip().split(None, 1)
+    if len(parts) != 2:
+        return "", ""
+    return parts[0].lower(), parts[1].strip()
+
+
 def _check_bearer(header: str) -> bool:
-    if not AUTH_TOKEN or not header.startswith("Bearer "):
+    scheme, token = _split_scheme(header)
+    if not AUTH_TOKEN or scheme != "bearer":
         return False
-    return secrets.compare_digest(header[7:].strip(), AUTH_TOKEN)
+    # _header() decodes as latin-1, which is lossless: re-encode to get the
+    # raw bytes the client sent, so a UTF-8 token still matches.
+    try:
+        raw = token.encode("latin-1")
+    except UnicodeEncodeError:
+        raw = token.encode("utf-8")
+    return secrets.compare_digest(raw, AUTH_TOKEN.encode("utf-8"))
 
 
 def _check_basic(header: str) -> bool:
-    if not AUTH_PASSWORD or not header.startswith("Basic "):
+    scheme, payload = _split_scheme(header)
+    if not AUTH_PASSWORD or scheme != "basic":
         return False
     try:
-        decoded = base64.b64decode(header[6:].strip()).decode("utf-8")
+        decoded = base64.b64decode(payload).decode("utf-8")
     except (ValueError, UnicodeDecodeError):
         return False
     username, _, password = decoded.partition(":")
     # Both compared, and both in constant time, so neither the username nor
     # the password can be recovered by timing the response.
-    user_ok = secrets.compare_digest(username, AUTH_USERNAME)
-    pass_ok = secrets.compare_digest(password, AUTH_PASSWORD)
+    user_ok = _same(username, AUTH_USERNAME)
+    pass_ok = _same(password, AUTH_PASSWORD)
     return user_ok and pass_ok
 
 

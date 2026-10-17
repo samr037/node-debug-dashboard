@@ -1,5 +1,3 @@
-import asyncio
-
 from fastapi import APIRouter
 
 from app.collectors.containers import collect_containers
@@ -16,6 +14,7 @@ from app.collectors.sensors import collect_sensors
 from app.collectors.storage import collect_storage
 from app.collectors.talos import collect_talos
 from app.collectors.usb import collect_usb
+from app.routers.degrade import dump, dump_list, gather_sections
 from app.routers.warnings import get_warnings
 
 router = APIRouter(tags=["overview"])
@@ -26,65 +25,50 @@ async def get_overview():
     """Full node overview — all sections aggregated. Primary endpoint for the dashboard."""
     # Collectors are independent and each spends its time waiting on
     # subprocesses or sockets, so running them one after another meant this
-    # endpoint took as long as all of them added together.
-    (
-        node,
-        cpu,
-        memory,
-        pci,
-        usb,
-        nics,
-        sensors,
-        gpus,
-        storage,
-        efi,
-        connectivity,
-        k8s,
-        talos_info,
-        containers_info,
-        processes_info,
-        warnings,
-    ) = await asyncio.gather(
-        collect_node_info(),
-        collect_cpu(),
-        collect_memory(),
-        collect_pci(),
-        collect_usb(),
-        collect_nics(),
-        collect_sensors(),
-        collect_gpus(),
-        collect_storage(),
-        collect_efi(),
-        collect_connectivity(),
-        collect_kubernetes(),
-        collect_talos(),
-        collect_containers(),
-        collect_processes(),
-        get_warnings(),
+    # endpoint took as long as all of them added together. A collector that
+    # fails leaves its section null (or empty) and is listed in "errors".
+    r, failed = await gather_sections(
+        node=collect_node_info(),
+        cpu=collect_cpu(),
+        memory=collect_memory(),
+        pci=collect_pci(),
+        usb=collect_usb(),
+        nics=collect_nics(),
+        sensors=collect_sensors(),
+        gpus=collect_gpus(),
+        storage=collect_storage(),
+        efi=collect_efi(),
+        connectivity=collect_connectivity(),
+        k8s=collect_kubernetes(),
+        talos=collect_talos(),
+        containers=collect_containers(),
+        processes=collect_processes(),
+        warnings=get_warnings(),
     )
 
     return {
-        "node": node.model_dump(),
+        "node": dump(r["node"]),
         "hardware": {
-            "cpu": cpu.model_dump(),
-            "memory": memory.model_dump(),
-            "pci_devices": [d.model_dump() for d in pci],
-            "usb_devices": [d.model_dump() for d in usb],
-            "nics": [n.model_dump() for n in nics],
-            "sensors": [s.model_dump() for s in sensors],
-            "gpus": [g.model_dump() for g in gpus],
+            "cpu": dump(r["cpu"]),
+            "memory": dump(r["memory"]),
+            "pci_devices": dump_list(r["pci"]),
+            "usb_devices": dump_list(r["usb"]),
+            "nics": dump_list(r["nics"]),
+            "sensors": dump_list(r["sensors"]),
+            "gpus": dump_list(r["gpus"]),
         },
-        "storage": storage.model_dump(),
+        "storage": dump(r["storage"]),
         "system": {
-            "efi": efi.model_dump(),
+            "efi": dump(r["efi"]),
         },
         "network": {
-            "interfaces": [n.model_dump() for n in nics],
-            "connectivity": connectivity,
+            "interfaces": dump_list(r["nics"]),
+            "connectivity": r["connectivity"],
         },
-        "kubernetes": k8s.model_dump(),
-        "talos": talos_info.model_dump(),
-        "containers": containers_info.model_dump(),
-        "processes": processes_info.model_dump(),
-        "warnings": [w.model_dump() for w in warnings],
+        "kubernetes": dump(r["k8s"]),
+        "talos": dump(r["talos"]),
+        "containers": dump(r["containers"]),
+        "processes": dump(r["processes"]),
+        "warnings": dump_list(r["warnings"]),
+        "errors": failed,
     }

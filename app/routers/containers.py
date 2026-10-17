@@ -1,8 +1,11 @@
 import asyncio
 import json
 import os
+import re
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+import anyio
+from fastapi import APIRouter, WebSocket
 
 from app.collectors.base import run_command
 from app.collectors.containers import (
@@ -19,6 +22,11 @@ from app.models.containers import (
 )
 
 router = APIRouter(tags=["containers"])
+
+# crictl resolves any unique prefix, so a short ID would let a caller walk
+# every container on the node one hex digit at a time. The UI always sends
+# the full ID.
+_CONTAINER_ID = re.compile(r"[0-9a-f]{64}")
 
 
 @router.get("", response_model=ContainersOverview)
@@ -61,14 +69,22 @@ async def _get_container_log_path(container_id: str) -> str | None:
 @router.websocket("/{container_id}/logs")
 async def container_logs(websocket: WebSocket, container_id: str):
     """Live log stream for a container via WebSocket."""
-    # Sanitize: container IDs are hex strings
-    if not all(c in "0123456789abcdef" for c in container_id):
+    # Browsers apply no CORS to WebSocket handshakes, so without this any
+    # page an operator visits could open the stream and read pod logs.
+    # Non-browser clients send no Origin and are left to the auth layer.
+    origin = websocket.headers.get("origin")
+    host = websocket.headers.get("host", "")
+    if origin is not None and urlsplit(origin).netloc.lower() != host.lower():
+        await websocket.close(code=1008, reason="Cross-origin request refused")
+        return
+
+    if not _CONTAINER_ID.fullmatch(container_id):
         await websocket.close(code=1008, reason="Invalid container ID")
         return
 
     await websocket.accept()
 
-    # Get log file path from crictl inspect, then tail -f it
+    # Get log file path from crictl inspect, then tail -F it
     log_path = await _get_container_log_path(container_id)
     if not log_path:
         await websocket.send_text("[Error: could not find log path for container]\n")
@@ -88,24 +104,46 @@ async def container_logs(websocket: WebSocket, container_id: str):
         await websocket.close()
         return
 
+    # -F follows the name, not the descriptor: kubelet rotates by renaming
+    # 0.log away and creating a new one, and -f would keep reading the old
+    # inode and go silent. stderr is discarded since nothing reads it.
     process = await asyncio.create_subprocess_exec(
         "tail",
         "-n",
         "200",
-        "-f",
+        "-F",
         real_log_path,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
     )
 
     try:
-        async for line in process.stdout:  # type: ignore[union-attr]
-            await websocket.send_text(line.decode(errors="replace"))
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        pass
+        async with anyio.create_task_group() as tg:
+
+            async def pump() -> None:
+                try:
+                    async for line in process.stdout:  # type: ignore[union-attr]
+                        await websocket.send_text(line.decode(errors="replace"))
+                except Exception:
+                    pass  # client gone mid-send, or tail closed its output
+                tg.cancel_scope.cancel()
+
+            async def until_disconnect() -> None:
+                # Sending alone never notices a closed client on a quiet
+                # container, which leaked the tail and held up shutdown.
+                # Reading does.
+                try:
+                    while (await websocket.receive())["type"] != "websocket.disconnect":
+                        pass
+                except Exception:
+                    pass
+                tg.cancel_scope.cancel()
+
+            tg.start_soon(pump)
+            tg.start_soon(until_disconnect)
     finally:
+        # No await needed, so it happens even if this handler is cancelled.
         if process.returncode is None:
             process.kill()
+        with anyio.CancelScope(shield=True):
             await process.wait()

@@ -16,14 +16,25 @@ COMMAND_TIMEOUT = float(os.environ.get("COMMAND_TIMEOUT", "10"))
 # months does not linger.
 DMESG_WINDOW_HOURS = int(os.environ.get("DMESG_WINDOW_HOURS", "168"))
 
+# Same idea for the lifetime error counters (NIC CRC/carrier, EDAC ECC):
+# they only reset on reboot, so a counter that has not moved for this long
+# is reported as info rather than staying critical for the whole uptime.
+COUNTER_WINDOW_HOURS = int(os.environ.get("COUNTER_WINDOW_HOURS", "24"))
+
+
+def env_bool(name: str, default: str = "false") -> bool:
+    """Same truthy set as entrypoint.sh: 1/true/yes/on, any case."""
+    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
 # SSH configuration. Off and key-only by default; set SSH_ENABLED=true
 # and pass SSH_AUTHORIZED_KEYS to enable.
-SSH_ENABLED = os.environ.get("SSH_ENABLED", "false").lower() in ("true", "1", "yes")
+SSH_ENABLED = env_bool("SSH_ENABLED")
 SSH_PORT = int(os.environ.get("SSH_PORT", "2022"))
-SSH_PASSWORD_AUTH = os.environ.get("SSH_PASSWORD_AUTH", "false").lower() in (
-    "true",
-    "1",
-    "yes",
+# The entrypoint refuses password auth when SSH_PASSWORD is empty, so report
+# what sshd actually does rather than what was asked for.
+SSH_PASSWORD_AUTH = env_bool("SSH_PASSWORD_AUTH") and bool(
+    os.environ.get("SSH_PASSWORD", "").strip()
 )
 SSH_AUTHORIZED_KEYS = os.environ.get("SSH_AUTHORIZED_KEYS", "")  # newline-separated
 
@@ -34,6 +45,9 @@ SSH_AUTHORIZED_KEYS = os.environ.get("SSH_AUTHORIZED_KEYS", "")  # newline-separ
 #
 #   AUTH_TOKEN     accepted as "Authorization: Bearer <token>"
 #   AUTH_PASSWORD  accepted as HTTP Basic, so a browser can prompt for it
-AUTH_TOKEN = os.environ.get("AUTH_TOKEN", "")
-AUTH_USERNAME = os.environ.get("AUTH_USERNAME", "debug")
-AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "")
+#
+# Stripped: a Secret built with --from-file usually ends in a newline, which
+# no client can ever send back, so every login would silently fail.
+AUTH_TOKEN = os.environ.get("AUTH_TOKEN", "").strip()
+AUTH_USERNAME = os.environ.get("AUTH_USERNAME", "debug").strip()
+AUTH_PASSWORD = os.environ.get("AUTH_PASSWORD", "").strip()
