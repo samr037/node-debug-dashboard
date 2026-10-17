@@ -4,7 +4,7 @@ from app.models.hardware import PCIDevice
 
 @ttl_cache()
 async def collect_pci() -> list[PCIDevice]:
-    stdout, _, rc = await run_command(["lspci", "-vmm"])
+    stdout, _, rc = await run_command(["lspci", "-vmm", "-k"])  # -k adds Driver:
     if rc != 0:
         return []
 

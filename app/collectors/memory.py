@@ -73,17 +73,21 @@ async def _collect_dimms() -> list[DimmInfo]:
 def _dimm_from_dict(d: dict[str, str]) -> DimmInfo:
     size_str = d.get("size", "")
     size_mb = None
-    m = re.match(r"(\d+)\s*(MB|GB)", size_str, re.IGNORECASE)
+    m = re.match(r"(\d+)\s*(MB|GB|TB)", size_str, re.IGNORECASE)
     if m:
-        size_mb = int(m.group(1))
-        if m.group(2).upper() == "GB":
-            size_mb *= 1024
+        size_mb = (
+            int(m.group(1))
+            * {"MB": 1, "GB": 1024, "TB": 1024 * 1024}[m.group(2).upper()]
+        )
 
-    speed_str = d.get("configured memory speed", d.get("speed", ""))
+    # Firmware often reports 'Configured Memory Speed: Unknown' next to a valid
+    # 'Speed', so take the first field that actually holds a number.
     speed_mhz = None
-    sm = re.match(r"(\d+)", speed_str)
-    if sm:
-        speed_mhz = int(sm.group(1))
+    for key in ("configured memory speed", "configured clock speed", "speed"):
+        sm = re.match(r"(\d+)", d.get(key, ""))
+        if sm:
+            speed_mhz = int(sm.group(1))
+            break
 
     serial = d.get("serial number", "")
     if serial.lower() in ("unknown", "not specified", ""):

@@ -1,5 +1,18 @@
+import math
+
 from app.collectors.base import run_command, ttl_cache
 from app.models.hardware import GPUInfo
+
+
+def _num(val: str, cast: type = float) -> float | int | None:
+    """Parse one nvidia-smi field; sentinels like '[N/A]', '[Not Supported]',
+    '[Unknown Error]' or '[GPU is lost]' become None instead of dropping the GPU."""
+    try:
+        num = float(val)
+    except ValueError:
+        return None
+    # nan/inf would crash int() or the JSON encoder
+    return cast(num) if math.isfinite(num) else None
 
 
 @ttl_cache()
@@ -35,13 +48,11 @@ async def collect_gpus() -> list[GPUInfo]:
                     index=int(parts[0]),
                     name=parts[1],
                     driver_version=parts[2],
-                    memory_total_mb=int(float(parts[3])) if parts[3] != "[N/A]" else 0,
-                    memory_used_mb=int(float(parts[4])) if parts[4] != "[N/A]" else 0,
-                    temperature_c=int(parts[5]) if parts[5] != "[N/A]" else None,
-                    utilization_percent=(
-                        int(parts[6]) if parts[6] != "[N/A]" else None
-                    ),
-                    power_draw_w=(float(parts[7]) if parts[7] != "[N/A]" else None),
+                    memory_total_mb=_num(parts[3], int) or 0,
+                    memory_used_mb=_num(parts[4], int) or 0,
+                    temperature_c=_num(parts[5], int),
+                    utilization_percent=_num(parts[6], int),
+                    power_draw_w=_num(parts[7]),
                 )
             )
         except (ValueError, IndexError):

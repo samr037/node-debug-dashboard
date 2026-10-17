@@ -2,6 +2,7 @@ import os
 import re
 
 from app.collectors.base import read_file, run_command, ttl_cache
+from app.collectors.cpu import parse_lscpu
 from app.config import HOST_PROC, HOST_ROOT
 from app.models.node import IPAddress, NodeInfo
 
@@ -28,19 +29,7 @@ async def collect_node_info() -> NodeInfo:
 
     # CPU info
     stdout, _, _ = await run_command(["lscpu"])
-    cpu_model = ""
-    cpu_sockets = 1
-    cpu_cores_per = 1
-    cpu_threads = 1
-    for line in stdout.splitlines():
-        if "Model name:" in line:
-            cpu_model = line.split(":", 1)[1].strip()
-        elif "Socket(s):" in line:
-            cpu_sockets = int(line.split(":", 1)[1].strip())
-        elif "Core(s) per socket:" in line:
-            cpu_cores_per = int(line.split(":", 1)[1].strip())
-        elif "CPU(s):" in line and "NUMA" not in line and "On-line" not in line:
-            cpu_threads = int(line.split(":", 1)[1].strip())
+    cpu_model, cpu_sockets, cpu_cores_per, cpu_threads = parse_lscpu(stdout)
     cpu_cores = cpu_sockets * cpu_cores_per
 
     # RAM
@@ -113,10 +102,21 @@ async def _collect_ip_addresses() -> list[IPAddress]:
         return []
 
     result: list[IPAddress] = []
-    skip = {"lo", "cni0", "flannel.1"}
+    # CNI, overlay and kube-proxy interfaces: pod/service addresses, not the node's
+    skip = {"lo", "cni0", "kube-ipvs0", "nodelocaldns"}
+    skip_prefixes = (
+        "veth",
+        "cali",
+        "lxc",
+        "cilium_",
+        "flannel",
+        "vxlan",
+        "tunl",
+        "genev",
+    )
     for iface in data:
         name = iface.get("ifname", "")
-        if name in skip or name.startswith(("veth", "cali", "lxc")):
+        if name in skip or name.startswith(skip_prefixes):
             continue
         for addr_info in iface.get("addr_info", []):
             result.append(

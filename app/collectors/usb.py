@@ -13,7 +13,8 @@ async def collect_usb() -> list[USBDevice]:
     devices: list[USBDevice] = []
     for line in stdout.splitlines():
         # Bus 001 Device 003: ID 0bda:8153 Realtek Semiconductor Corp. ...
-        m = re.match(r"Bus\s+(\d+)\s+Device\s+(\d+):\s+ID\s+(\S+)\s+(.*)", line.strip())
+        # (the name is empty when neither hwdb nor the device provide one)
+        m = re.match(r"Bus\s+(\d+)\s+Device\s+(\d+):\s+ID\s+(\S+)\s*(.*)", line.strip())
         if m:
             devices.append(
                 USBDevice(
