@@ -1,46 +1,175 @@
+<div align="center">
+
+<a href="https://www.talos.dev"><img src="docs/talos-logo.svg" alt="Talos Linux" height="72"></a>
+
 # Node Debug Dashboard
 
-> Hardware monitoring, Kubernetes diagnostics, and container debugging for Kubernetes nodes — accessible as a web dashboard, REST API, and SSH shell.
+**Your Talos nodes have no shell. Now they have a debugger.**
 
-<p align="left">
-  <a href="https://www.talos.dev"><img src="docs/talos-logo.svg" alt="Talos Linux" height="48"></a>
-</p>
+Hardware, storage, Kubernetes and container diagnostics for every node, as a web dashboard, a REST API and an opt-in SSH shell. One privileged DaemonSet, no system extension, no reboot.
+
+[![CI](https://github.com/samr037/node-debug-dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/samr037/node-debug-dashboard/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/samr037/node-debug-dashboard?sort=semver)](https://github.com/samr037/node-debug-dashboard/releases)
+[![Image](https://img.shields.io/badge/image-ghcr.io-2496ED?logo=docker&logoColor=white)](https://github.com/samr037/node-debug-dashboard/pkgs/container/node-debug-dashboard)
+[![Helm](https://img.shields.io/badge/helm-oci%3A%2F%2Fghcr.io-0F1689?logo=helm&logoColor=white)](charts/node-debug-dashboard)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+[Quick start](#quick-start) · [Features](#features) · [Screenshots](#screenshots) · [SSH shell](docs/ssh.md) · [API](#api-reference) · [Security](#security)
+
+<a href="docs/media/ndd-demo.mp4"><img src="docs/media/ndd-demo.gif" alt="Node Debug Dashboard demo: a Talos node refusing SSH, a helm install, the dashboard flagging a failing NVMe drive, and the kdiag-etcd shell script" width="860"></a>
+
+<sub>The demo uses fictional data. [MP4 version](docs/media/ndd-demo.mp4) · source in [docs/video](docs/video/index.html)</sub>
+
+</div>
 
 > [!WARNING]
-> ⚠️ **Debug / observability tool — privileged workload.** Each pod runs as `privileged: true` with `hostNetwork`, `hostPID`, and the host filesystem mounted at `/host`. Anyone with HTTP access to port 80 on a node gets a full read of that node. Don't expose it to untrusted networks. Treat enabling SSH (off by default) as equivalent to granting node-root.
-
-![Dashboard Demo](docs/screenshots/dashboard-demo.gif)
+> **Privileged workload.** Each pod runs `privileged: true` with `hostNetwork`, `hostPID` and the host filesystem at `/host`. Whoever can reach port 80 on a node and log in can read that node in full. Keep it off untrusted networks, and treat SSH access (off by default) as node-root.
 
 ## Why this exists
 
-[Talos Linux](https://www.talos.dev) has no shell, no package manager, and no SSH on the host. That's a security feature, but it's friction for teams coming from a traditional distro. The reflex when something's wrong is to `ssh` in and run `smartctl`, `lsblk`, `dmesg`, or `tcpdump`. On Talos that workflow is gone: to add a tool to the host you have to ship a system extension and rebootstrap the node.
+[Talos Linux](https://www.talos.dev) has no shell, no package manager and no SSH on the host. That is a security feature, but it breaks the usual reflex when something goes wrong: `ssh` in and run `smartctl`, `lsblk`, `dmesg` or `tcpdump`. Adding a tool to a Talos host means shipping a system extension and rebooting the node.
 
-This dashboard re-adds those tools without putting them on the host. It runs as a privileged DaemonSet, ships the usual Linux diagnostic tools (smartctl, ethtool, dmidecode, tcpdump, plus the `ndiag-*` and `kdiag-*` scripts), and exposes them over an HTTP UI, a REST API, and an opt-in SSH shell.
+This project brings those tools back without putting them on the host. A privileged DaemonSet ships the usual Linux diagnostic tools (smartctl, ethtool, dmidecode, tcpdump, plus the `ndiag-*` and `kdiag-*` scripts) and serves what they see over an HTTP UI, a REST API and an opt-in SSH shell. Need another tool? Add it to the image and `helm upgrade`.
 
-When you need a new tool, add it to the image and `helm upgrade`. No system extension, no node reboot. Same upgrade path for bug fixes and new diagnostic checks.
-
-It works on any Kubernetes distribution. The Talos-aware sections (machine type, schematic ID, extensions, etcd certs at `/system/secrets/etcd/`, EFI boot entries) are inactive elsewhere.
+It works on any Kubernetes distribution; the Talos-specific sections (machine type, schematic ID, extensions, etcd certs under `/system/secrets/etcd/`) simply stay empty elsewhere.
 
 ## Features
 
-- **Hardware** — CPU, RAM (DIMMs, ECC), PCI, USB, NICs, sensors (temps/fans/voltages), NVIDIA GPUs (via nsenter)
-- **Storage** — Disks, partitions, comprehensive SMART health (ATA + NVMe, wearout, temperatures, error counters, USB bridge support), disk usage with severity alerts
-- **System** — UEFI boot order and entries
-- **Network** — Interface stats, speed/duplex, error counters, DNS/internet/K8s API connectivity
-- **Kubernetes** — Node labels, conditions, capacity/allocatable resources, PKI certificates (obfuscated), component health probes, etcd deep metrics (DB size, leader, members, raft index)
-- **Talos** — Machine type (worker/CP), extensions, network interfaces, version, schematic ID
-- **Containers** — System services (etcd, kubelet, apiserver...) + workload pods with memory stats
-- **Live Logs** — WebSocket-based container log streaming with tail
-- **Processes** — Top 200 host processes by memory with PID/PPID/user/CPU%/MEM%
-- **Warnings** — Aggregated alerts from SMART, temperatures, memory errors, disk usage, certificate expiry, K8s node conditions
-- **Cluster Navigation** — Searchable dropdown listing all nodes with role/status, click to jump between dashboards
-- **SSH Debug Shell** — Zsh + oh-my-zsh (agnoster), vim with custom config, 11 diagnostic scripts (`ndiag-*` + `kdiag-*`) with `--raw` mode, 60+ aliases, dynamic MOTD, `help` command — [full SSH docs](docs/ssh.md)
-- **Themes** — Dark, Light, and Auto (follows OS preference), persists across nodes via URL params
-- **Scalable** — Tiered caching (10s/60s/5min), section-based parallel fetching, dropdown cluster bar with search
-- **Auto-refresh** — 10-second polling with persistent UI state (open sections and scroll position preserved)
-- **REST API** — Full Swagger/OpenAPI docs at `/docs`, per-section endpoints at `/api/sections/{name}`
+| | |
+|---|---|
+| **Warnings at a glance** | One panel that aggregates SMART failures (pending and uncorrectable sectors, self-test failures), temperatures, ECC/MCE errors, NIC errors, disk usage, certificate expiry and node conditions. |
+| **Hardware** | CPU, RAM and DIMMs (ECC), PCI with drivers, USB, NICs, temperature/fan/voltage sensors, NVIDIA GPUs. x86_64 and arm64. |
+| **Storage** | Disks and partitions, SMART for ATA, NVMe and USB bridges (wear, spare, error counters, standby-aware), disk usage with severity. |
+| **Kubernetes** | Node labels, conditions and resources, PKI certificate expiry, component health, etcd deep metrics (DB size, fragmentation, leader, members, quota). |
+| **Talos** | Machine type, version, schematic ID, extensions, network interfaces, install disk, EFI boot entries. |
+| **Containers** | System services and workload pods with memory stats, plus live log streaming over WebSocket. |
+| **Processes** | Top host processes by memory and CPU, with credentials masked in command lines. |
+| **Cluster navigation** | Searchable node switcher with role and status; jump from one node's dashboard to another. |
+| **SSH debug shell** | Zsh, vim, 60+ aliases and 11 diagnostic scripts (`ndiag-*` for hardware, `kdiag-*` for Kubernetes), each with a `--raw` mode. [Full docs](docs/ssh.md). |
+| **REST API** | Every section as JSON under `/api`, Swagger UI at `/docs`. Partial failures degrade a section instead of failing the page. |
+| **Secure defaults** | Generated dashboard password on `helm install`, read-only RBAC, SSH off by default with key auth and per-node host keys. |
+
+Dark, light and auto themes; 10-second auto-refresh that keeps your open sections and scroll position; tiered caching (10 s / 60 s / 5 min) so heavy probes such as SMART don't run on every refresh.
+
+## Quick start
+
+**1. Create a privileged namespace.** The DaemonSet needs `privileged`, `hostPath` and `hostNetwork`:
+
+```bash
+kubectl create ns node-debug
+kubectl label ns node-debug pod-security.kubernetes.io/enforce=privileged --overwrite
+```
+
+**2. Install the chart** (Helm 3.8+):
+
+```bash
+helm install ndd oci://ghcr.io/samr037/charts/node-debug-dashboard -n node-debug
+```
+
+**3. Log in.** Open `http://<node-ip>/` on any node. The user is `debug`, and the generated password is printed by the install notes:
+
+```bash
+kubectl -n node-debug get secret ndd-node-debug-dashboard-credentials -o jsonpath='{.data.auth-password}' | base64 -d
+```
+
+<sub>The exact command for your release name is in `helm status ndd -n node-debug`. With Argo CD or Flux (`helm template`) no password can be generated: set `auth.existingSecret` instead, see [Security](#security).</sub>
+
+**Enable the SSH shell** with your public key:
+
+```bash
+helm upgrade ndd oci://ghcr.io/samr037/charts/node-debug-dashboard -n node-debug --reuse-values \
+  --set ssh.enabled=true \
+  --set-string ssh.authorizedKeys="$(cat ~/.ssh/id_ed25519.pub)"
+ssh -p 2022 root@<node-ip>
+```
+
+All chart values are documented in the [chart README](charts/node-debug-dashboard/README.md).
+
+<details>
+<summary><b>Plain manifest (no Helm)</b></summary>
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-debug-dashboard
+spec:
+  selector:
+    matchLabels:
+      app: node-debug-dashboard
+  template:
+    metadata:
+      labels:
+        app: node-debug-dashboard
+    spec:
+      hostNetwork: true
+      # The node's resolv.conf cannot resolve kubernetes.default.svc.
+      dnsPolicy: ClusterFirstWithHostNet
+      hostPID: true
+      hostIPC: true
+      serviceAccountName: node-debug-dashboard
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: dashboard
+          image: ghcr.io/samr037/node-debug-dashboard:latest
+          securityContext:
+            privileged: true
+          ports:
+            - containerPort: 80
+            - containerPort: 2022  # only used if SSH_ENABLED=true
+          env:
+            - name: KUBERNETES_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # SSH is disabled by default. To enable, set SSH_ENABLED=true
+            # and provide your own public key in SSH_AUTHORIZED_KEYS.
+            - name: SSH_ENABLED
+              value: "false"
+            - name: SSH_PASSWORD_AUTH
+              value: "false"
+            - name: SSH_AUTHORIZED_KEYS
+              value: "ssh-ed25519 AAAA... user@host"
+            # Dashboard login (HTTP Basic as "debug"); see Security below.
+            # kubectl create secret generic ndd-auth --from-literal=password=...
+            - name: AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: ndd-auth, key: password }
+          volumeMounts:
+            - name: host-root
+              mountPath: /host
+            - name: host-proc
+              mountPath: /host-proc
+              readOnly: true
+      volumes:
+        - name: host-root
+          hostPath: { path: /, type: Directory }
+        - name: host-proc
+          hostPath: { path: /proc, type: Directory }
+```
+
+Then access `http://<node-ip>/` for the dashboard, `http://<node-ip>/docs` for Swagger.
+
+> **Note:** Create a ServiceAccount bound to a ClusterRole matching the chart's: `get`/`list`/`watch` on core `nodes`, `pods`, `services`, `endpoints` and `events`, plus `get`/`list` on `metrics.k8s.io` `nodes` and `pods`. Do not grant `nodes/proxy` (the kubelet authorizes exec through it) or anything broader. The Helm chart (`charts/node-debug-dashboard`) creates all of this for you.
+
+</details>
+
+<details>
+<summary><b>Docker (standalone, outside Kubernetes)</b></summary>
+
+```bash
+docker run --privileged --net=host --pid=host \
+  -v /:/host:ro -v /proc:/host-proc:ro \
+  -e AUTH_PASSWORD='change-me' \
+  ghcr.io/samr037/node-debug-dashboard:latest
+```
+
+</details>
 
 ## Screenshots
+
+Real captures from a five-node Talos homelab.
 
 | Dark Theme | Light Theme |
 |---|---|
@@ -73,6 +202,9 @@ It works on any Kubernetes distribution. The Talos-aware sections (machine type,
 | ![kdiag-pods](docs/screenshots/ssh-kdiag-pods.png) | ![ndiag-hw](docs/screenshots/ssh-ndiag-hw.png) |
 
 ## Architecture
+
+<details>
+<summary><b>Diagrams: system overview, data flow, component model</b></summary>
 
 ### System Overview
 
@@ -184,86 +316,7 @@ classDiagram
     Frontend --> Router : HTTP/WS
 ```
 
-## Quick Start
-
-### Kubernetes DaemonSet (recommended)
-
-Deploy as a privileged DaemonSet on every node:
-
-```yaml
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: node-debug-dashboard
-spec:
-  selector:
-    matchLabels:
-      app: node-debug-dashboard
-  template:
-    metadata:
-      labels:
-        app: node-debug-dashboard
-    spec:
-      hostNetwork: true
-      # The node's resolv.conf cannot resolve kubernetes.default.svc.
-      dnsPolicy: ClusterFirstWithHostNet
-      hostPID: true
-      hostIPC: true
-      serviceAccountName: node-debug-dashboard
-      tolerations:
-        - operator: Exists
-      containers:
-        - name: dashboard
-          image: ghcr.io/samr037/node-debug-dashboard:latest
-          securityContext:
-            privileged: true
-          ports:
-            - containerPort: 80
-            - containerPort: 2022  # only used if SSH_ENABLED=true
-          env:
-            - name: KUBERNETES_NODE_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: spec.nodeName
-            # SSH is disabled by default. To enable, set SSH_ENABLED=true
-            # and provide your own public key in SSH_AUTHORIZED_KEYS.
-            - name: SSH_ENABLED
-              value: "false"
-            - name: SSH_PASSWORD_AUTH
-              value: "false"
-            - name: SSH_AUTHORIZED_KEYS
-              value: "ssh-ed25519 AAAA... user@host"
-            # Dashboard login (HTTP Basic as "debug"); see Security below.
-            # kubectl create secret generic ndd-auth --from-literal=password=...
-            - name: AUTH_PASSWORD
-              valueFrom:
-                secretKeyRef: { name: ndd-auth, key: password }
-          volumeMounts:
-            - name: host-root
-              mountPath: /host
-            - name: host-proc
-              mountPath: /host-proc
-              readOnly: true
-      volumes:
-        - name: host-root
-          hostPath: { path: /, type: Directory }
-        - name: host-proc
-          hostPath: { path: /proc, type: Directory }
-```
-
-Then access `http://<node-ip>/` for the dashboard, `http://<node-ip>/docs` for Swagger.
-
-> **Note:** Create a ServiceAccount bound to a ClusterRole matching the chart's: `get`/`list`/`watch` on core `nodes`, `pods`, `services`, `endpoints` and `events`, plus `get`/`list` on `metrics.k8s.io` `nodes` and `pods`. Do not grant `nodes/proxy` (the kubelet authorizes exec through it) or anything broader. The Helm chart (`charts/node-debug-dashboard`) creates all of this for you.
-
-### Docker (standalone)
-
-```bash
-docker run --privileged --net=host --pid=host \
-  -v /:/host:ro -v /proc:/host-proc:ro \
-  -e SSH_ENABLED=true \
-  -p 80:80 -p 2022:2022 \
-  ghcr.io/samr037/node-debug-dashboard:latest
-```
+</details>
 
 ## API Reference
 
@@ -398,7 +451,7 @@ Both accounts in the image ship locked, and the `debug` user has passwordless `s
 
 ```bash
 # Clone
-git clone <repo-url> && cd node-debug-dashboard
+git clone https://github.com/samr037/node-debug-dashboard && cd node-debug-dashboard
 
 # Install dependencies
 pip install -r requirements.txt
@@ -455,8 +508,6 @@ app/
 │   ├── index.html          # Dashboard layout + cluster bar + log modal
 │   ├── style.css           # Dark/light/auto theme, responsive, gauges
 │   └── app.js              # Section fetching, rendering, WebSocket, theme
-├── entrypoint.sh           # Starts sshd (conditional) + uvicorn
-└── Dockerfile              # debian:bookworm + 200 tools + crictl + Python
 
 ssh/                        # SSH shell configuration
 ├── vimrc                   # Vim config (syntax, status line, K8s shortcuts)
@@ -480,9 +531,19 @@ scripts/                    # Diagnostic scripts (in PATH via symlinks)
 
 docs/
 ├── ssh.md                  # Full SSH shell documentation
-└── screenshots/            # Dashboard screenshots
+├── screenshots/            # Dashboard screenshots
+├── video/                  # HyperFrames source of the demo video
+└── media/                  # Rendered demo (MP4 + GIF)
+
+charts/node-debug-dashboard/  # Helm chart
+entrypoint.sh               # Starts sshd (conditional) + uvicorn
+Dockerfile                  # debian:bookworm + diagnostic tools + crictl + Python
 ```
+
+## Contributing
+
+Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT
+[MIT](LICENSE)
