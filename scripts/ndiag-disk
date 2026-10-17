@@ -21,7 +21,9 @@ _smart_attr() {
     # Print a SMART attribute with color coding
     # Usage: _smart_attr "Label" "value" "unit" "warn_threshold" "crit_threshold" "invert"
     local label="$1" val="$2" unit="${3:-}" warn="${4:-}" crit="${5:-}" invert="${6:-}"
-    [ -z "$val" ] || [ "$val" = "0" ] && return
+    [ -z "$val" ] && return
+    # 0 is uninteresting for counters, but critical for inverted ones (spare, life left)
+    [ "$val" = "0" ] && [ "$invert" != "1" ] && return
     local color="$C_DIM"
     if [ -n "$crit" ] && [ "$val" -gt "$crit" ] 2>/dev/null; then
         color="$C_RED"
@@ -47,6 +49,8 @@ _parse_ata_smart() {
 
     # Extract raw values by attribute name
     _ata_raw() { echo "$output" | awk -v name="$1" '$2==name{print $10}' | head -1; }
+    # Normalized VALUE column (leading zeros stripped)
+    _ata_val() { echo "$output" | awk -v name="$1" '$2==name{print $4+0}' | head -1; }
 
     local hours=$(_ata_raw Power_On_Hours)
     local cycles=$(_ata_raw Power_Cycle_Count)
@@ -64,7 +68,8 @@ _parse_ata_smart() {
 
     # SSD-specific
     local wear=$(_ata_raw Wear_Leveling_Count)
-    local lifetime=$(_ata_raw Percent_Lifetime_Remain)
+    # Normalized VALUE is the % remaining; RAW is % *used* on Crucial/Micron
+    local lifetime=$(_ata_val Percent_Lifetime_Remain)
     local avg_erase=$(_ata_raw Ave_Block-Erase_Count)
     [ -z "$avg_erase" ] && avg_erase=$(_ata_raw Average_PE_Cycles_TLC)
     [ -z "$avg_erase" ] && avg_erase=$(_ata_raw Block_Erase_Count)
@@ -255,21 +260,20 @@ cmd_io() {
     echo -e "${C_DIM}  DISK       READ/s    WRITE/s    READ KB/s  WRITE KB/s${C_RESET}"
     local disks=$(lsblk -dno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}')
     for disk in $disks; do
-        local stats1=$(awk -v d="$disk" '$3==d {print $4, $6, $8}' "${HOST_PROC:-/host-proc}/diskstats" 2>/dev/null)
+        # diskstats: $4 reads completed, $6 sectors read, $8 writes completed, $10 sectors written
+        local stats1=$(awk -v d="$disk" '$3==d {print $4, $6, $8, $10}' "${HOST_PROC:-/host-proc}/diskstats" 2>/dev/null)
         [ -z "$stats1" ] && continue
         sleep 1
-        local stats2=$(awk -v d="$disk" '$3==d {print $4, $6, $8}' "${HOST_PROC:-/host-proc}/diskstats" 2>/dev/null)
+        local stats2=$(awk -v d="$disk" '$3==d {print $4, $6, $8, $10}' "${HOST_PROC:-/host-proc}/diskstats" 2>/dev/null)
+        [ -z "$stats2" ] && continue
 
-        local r1=$(echo "$stats1" | awk '{print $1}')
-        local w1=$(echo "$stats1" | awk '{print $2}')
-        local rs1=$(echo "$stats1" | awk '{print $3}')
-        local r2=$(echo "$stats2" | awk '{print $1}')
-        local w2=$(echo "$stats2" | awk '{print $2}')
-        local rs2=$(echo "$stats2" | awk '{print $3}')
+        local r1 rsec1 w1 wsec1 r2 rsec2 w2 wsec2
+        read -r r1 rsec1 w1 wsec1 <<< "$stats1"
+        read -r r2 rsec2 w2 wsec2 <<< "$stats2"
 
-        local rd=$((r2 - r1))
-        local wd=$((w2 - w1))
-        printf "  %-10s %6d    %7d\n" "$disk" "$rd" "$wd"
+        # Sectors are always 512 bytes in diskstats → KB = sectors / 2
+        printf "  %-10s %6d    %7d    %9d  %10d\n" "$disk" \
+            "$((r2 - r1))" "$((w2 - w1))" "$(((rsec2 - rsec1) / 2))" "$(((wsec2 - wsec1) / 2))"
     done
 
     # iostat if available

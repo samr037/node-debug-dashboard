@@ -6,6 +6,7 @@
 set -euo pipefail
 
 RAW=0
+YES=0
 
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
@@ -14,8 +15,46 @@ C_GREEN="\033[32m"
 C_YELLOW="\033[33m"
 C_RED="\033[31m"
 C_DIM="\033[2m"
+HOST_PROC="${HOST_PROC:-/host-proc}"
 
 header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
+
+# Filesystem type of a device. blkid probes the superblock; lsblk relies on
+# the udev database, which this container doesn't have (FSTYPE empty on Talos).
+_fstype() {
+    local t
+    t=$(blkid -o value -s TYPE "$1" 2>/dev/null) || true
+    [ -z "$t" ] && { t=$(lsblk -dno FSTYPE "$1" 2>/dev/null | head -1 | xargs) || true; }
+    echo "$t"
+}
+
+# Where a device is mounted, as seen by the HOST (PID 1 mount namespace).
+# lsblk only sees this container's namespace, which misses everything the host
+# mounted after the pod started (CSI/Longhorn PVCs, user volumes...).
+# Matches on maj:min, or on the mount source path (btrfs reports 0:xx there).
+_host_mount() {
+    local dev="$1" majmin real
+    majmin=$(lsblk -dno MAJ:MIN "$dev" 2>/dev/null | xargs) || true
+    real=$(readlink -f "$dev" 2>/dev/null) || real="$dev"
+    if [ -r "${HOST_PROC}/1/mountinfo" ]; then
+        awk -v mm="$majmin" -v d1="$dev" -v d2="$real" '
+            { src=""; for (i=7; i<=NF; i++) if ($i=="-") { src=$(i+2); break } }
+            (mm!="" && $3==mm) || src==d1 || src==d2 { print $5; exit }
+        ' "${HOST_PROC}/1/mountinfo" 2>/dev/null || true
+    fi
+}
+
+# Checkable partitions for the usage text. FSTYPE from blkid, mount from the
+# host namespace: lsblk -r leaves an empty FSTYPE on Talos, shifting columns.
+_list_partitions() {
+    blkid -o device 2>/dev/null | while read -r d; do
+        local t m
+        t=$(blkid -o value -s TYPE "$d" 2>/dev/null) || true
+        case "$t" in ""|swap|squashfs) continue ;; esac
+        m=$(_host_mount "$d")
+        printf "    %-17s %-8s %-20s %s\n" "$d" "$t" "$m" "$(lsblk -dno SIZE "$d" 2>/dev/null | xargs)"
+    done || true
+}
 
 cmd_status() {
     if [ "$RAW" = "1" ]; then
@@ -31,16 +70,15 @@ cmd_status() {
     header "Filesystem Status"
     echo -e "  ${C_DIM}DEVICE          FSTYPE   MOUNT                    STATE${C_RESET}"
 
-    # Use blkid for fstype (lsblk doesn't show it on Talos)
-    blkid 2>/dev/null | while read -r line; do
-        local dev=$(echo "$line" | cut -d: -f1)
+    # Use blkid for fstype (lsblk doesn't show it on Talos). Query TYPE per
+    # device: a regex on the full blkid line also matches PTTYPE=/SEC_TYPE=.
+    blkid -o device 2>/dev/null | while read -r dev; do
         local name=$(basename "$dev")
-        local fstype=$(echo "$line" | grep -oP 'TYPE="\K[^"]+') || true
+        local fstype=$(blkid -o value -s TYPE "$dev" 2>/dev/null) || true
         local mount=$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | head -1 | xargs) || true
         [ -z "$fstype" ] && continue
         [[ "$fstype" == "swap" || "$fstype" == "squashfs" || "$fstype" == "vfat" ]] && continue
 
-        local dev="/dev/$name"
         local state=""
         local color="$C_DIM"
 
@@ -76,7 +114,7 @@ cmd_check() {
         echo "  Example: ndiag-fsck check /dev/sda4"
         echo ""
         echo "  Available partitions:"
-        lsblk -rno NAME,FSTYPE,MOUNTPOINT,SIZE 2>/dev/null | awk '$2!="" && $2!="swap" && $2!="squashfs" {printf "    /dev/%-12s %-8s %-20s %s\n", $1, $2, $3, $4}'
+        _list_partitions
         return
     fi
 
@@ -86,8 +124,9 @@ cmd_check() {
         return
     fi
 
-    local fstype=$(lsblk -no FSTYPE "$dev" 2>/dev/null | head -1 | xargs) || true
-    local mount=$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | head -1 | xargs) || true
+    local fstype=$(_fstype "$dev")
+    local mount=$(_host_mount "$dev")
+    [ -z "$mount" ] && { mount=$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | head -1 | xargs) || true; }
 
     header "Read-Only Filesystem Check — ${dev}"
     echo -e "  Type:    ${fstype:-unknown}"
@@ -171,7 +210,11 @@ cmd_smart_test() {
 
     if [ "$RAW" = "1" ]; then
         echo "### raw: smartctl -t $test_type $dev ###"
-        smartctl -t "$test_type" "$dev" 2>&1 || smartctl -t "$test_type" -d sat "$dev" 2>&1 || true
+        local rc=0
+        smartctl -t "$test_type" "$dev" 2>&1 || rc=$?
+        # Exit status is a bitmask: only bits 0-1 mean the device couldn't be
+        # opened/identified (retry as SAT). Bits 2+ are health/log flags.
+        if (( rc & 3 )); then smartctl -t "$test_type" -d sat "$dev" 2>&1 || true; fi
         echo ""
         echo "### raw: smartctl -l selftest $dev ###"
         smartctl -l selftest "$dev" 2>&1 || smartctl -l selftest -d sat "$dev" 2>&1 || true
@@ -182,13 +225,26 @@ cmd_smart_test() {
 
     # Start the test
     echo -e "  ${C_DIM}Starting ${test_type} self-test...${C_RESET}"
-    local result
-    result=$(smartctl -t "$test_type" "$dev" 2>/dev/null) || result=$(smartctl -t "$test_type" -d sat "$dev" 2>/dev/null) || true
+    local result rc=0
+    result=$(smartctl -t "$test_type" "$dev" 2>/dev/null) || rc=$?
+    # Exit status is a bitmask: only bits 0-1 mean the device couldn't be
+    # opened/identified (retry as SAT). Bits 2+ are health/log flags and a
+    # re-issue would be refused while the test runs, losing the ETA.
+    if (( rc & 3 )); then
+        result=$(smartctl -t "$test_type" -d sat "$dev" 2>/dev/null) || true
+    fi
 
     local eta
     eta=$(echo "$result" | grep -i "complete after" | sed 's/.*after *//' | xargs) || true
-    echo -e "  ${C_GREEN}Test started${C_RESET}"
-    [ -n "$eta" ] && echo -e "  ETA: ${eta}"
+    if echo "$result" | grep -qiE "test(ing)? has begun"; then
+        echo -e "  ${C_GREEN}Test started${C_RESET}"
+        [ -n "$eta" ] && echo -e "  ETA: ${eta}"
+    else
+        echo -e "  ${C_RED}Self-test was NOT started${C_RESET}"
+        echo "$result" | grep -v '^$' | tail -3 | sed 's/^/    /' || true
+        echo ""
+        return 1
+    fi
     echo ""
 
     # Show previous results
@@ -209,22 +265,57 @@ cmd_repair() {
         echo -e "  ${C_RED}The device MUST be unmounted first.${C_RESET}"
         echo ""
         echo "  Available partitions:"
-        lsblk -rno NAME,FSTYPE,MOUNTPOINT,SIZE 2>/dev/null | awk '$2!="" && $2!="swap" && $2!="squashfs" {printf "    /dev/%-12s %-8s %-20s %s\n", $1, $2, $3, $4}'
+        _list_partitions
         return
     fi
 
-    local mount=$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | head -1 | xargs) || true
+    if [ ! -b "$dev" ]; then
+        echo -e "  ${C_RED}ERROR: ${dev} is not a block device${C_RESET}"
+        return 1
+    fi
+
+    # Mounted anywhere? Check the host's mount namespace (not only ours),
+    # then ask the kernel: an O_EXCL open fails with EBUSY while the device is
+    # mounted or held (LVM/dm, md, swap), whatever namespace did it.
+    local mount=$(_host_mount "$dev")
+    [ -z "$mount" ] && { mount=$(lsblk -no MOUNTPOINT "$dev" 2>/dev/null | grep -v '^$' | head -1 | xargs) || true; }
     if [ -n "$mount" ]; then
         echo -e "  ${C_RED}ERROR: ${dev} is mounted at ${mount}${C_RESET}"
         echo -e "  ${C_RED}Unmount the filesystem first before attempting repair.${C_RESET}"
         echo -e "  ${C_DIM}Use 'ndiag-fsck check ${dev}' for a read-only check instead.${C_RESET}"
         return 1
     fi
+    if ! python3 -c 'import os,sys; os.close(os.open(sys.argv[1], os.O_RDONLY | os.O_EXCL))' "$dev" 2>/dev/null; then
+        echo -e "  ${C_RED}ERROR: ${dev} is busy (mounted or held by another device/process)${C_RESET}"
+        return 1
+    fi
 
-    local fstype=$(lsblk -no FSTYPE "$dev" 2>/dev/null | head -1 | xargs) || true
+    local fstype=$(_fstype "$dev")
+    case "$fstype" in
+        ext2|ext3|ext4|xfs|btrfs) ;;
+        *)
+            echo -e "  ${C_DIM}No repair tool for ${fstype:-unknown}${C_RESET}"
+            return 1
+            ;;
+    esac
+
     header "Filesystem Repair — ${dev} (${fstype})"
     echo -e "  ${C_RED}${C_BOLD}REPAIRING FILESYSTEM — THIS MAY MODIFY DATA${C_RESET}"
     echo ""
+
+    if [ "$YES" != "1" ]; then
+        if [ ! -t 0 ]; then
+            echo -e "  ${C_RED}Refusing to repair non-interactively without --yes${C_RESET}"
+            return 1
+        fi
+        local answer=""
+        read -r -p "  Type the device path (${dev}) to confirm: " answer || true
+        if [ "$answer" != "$dev" ]; then
+            echo "  Aborted."
+            return 1
+        fi
+        echo ""
+    fi
 
     case "$fstype" in
         ext2|ext3|ext4)
@@ -238,9 +329,6 @@ cmd_repair() {
         btrfs)
             echo -e "  ${C_DIM}Running: btrfs check --repair ${dev}${C_RESET}"
             btrfs check --repair "$dev" 2>&1 | sed 's/^/  /' || true
-            ;;
-        *)
-            echo -e "  ${C_DIM}No repair tool for ${fstype:-unknown}${C_RESET}"
             ;;
     esac
 }
@@ -261,11 +349,13 @@ SUBCOMMANDS
 
 OPTIONS
     --raw, -r  Output raw underlying commands
+    --yes, -y  Skip the 'repair' confirmation (type the device path)
 
 SAFETY
     - 'status', 'check', 'badblocks' are READ-ONLY and safe
     - 'smart-test' triggers a drive self-test (non-destructive)
-    - 'repair' MODIFIES the filesystem — device must be unmounted
+    - 'repair' MODIFIES the filesystem — refused if the device is mounted
+      on the host or busy, and asks you to type the device path to confirm
     - For destructive badblocks write test: badblocks -wsv /dev/xxx
 
 EXAMPLES
@@ -278,8 +368,14 @@ EXAMPLES
 EOF
 }
 
-# Parse --raw flag
-[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
+# Parse --raw / --yes flags
+while [[ "${1:-}" == -* ]]; do
+    case "$1" in
+        --raw|-r) RAW=1; shift ;;
+        --yes|-y) YES=1; shift ;;
+        *) break ;;
+    esac
+done
 
 case "${1:-status}" in
     status)     cmd_status ;;

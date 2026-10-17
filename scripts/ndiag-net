@@ -55,7 +55,9 @@ cmd_ifaces() {
     echo ""
     header "Interface Errors & Drops"
     echo -e "${C_DIM}  IFACE           RX_ERR  RX_DROP  TX_ERR  TX_DROP${C_RESET}"
-    for iface in $(ls /host/sys/class/net/ 2>/dev/null); do
+    for iface_path in /host/sys/class/net/*; do
+        [ -e "$iface_path" ] || continue
+        local iface="${iface_path##*/}"
         local rx_err=$(cat /host/sys/class/net/$iface/statistics/rx_errors 2>/dev/null || echo 0)
         local rx_drop=$(cat /host/sys/class/net/$iface/statistics/rx_dropped 2>/dev/null || echo 0)
         local tx_err=$(cat /host/sys/class/net/$iface/statistics/tx_errors 2>/dev/null || echo 0)
@@ -69,11 +71,15 @@ cmd_ifaces() {
     # Speed/duplex for physical interfaces
     echo ""
     header "Link Speed"
-    for iface in $(ls /host/sys/class/net/ 2>/dev/null); do
+    for iface_path in /host/sys/class/net/*; do
+        [ -e "$iface_path" ] || continue
+        local iface="${iface_path##*/}"
         local speed=$(ethtool "$iface" 2>/dev/null | grep -i speed | awk '{print $2}')
         local duplex=$(ethtool "$iface" 2>/dev/null | grep -i duplex | awk '{print $2}')
-        [ -n "$speed" ] && [ "$speed" != "Unknown!" ] && \
+        # if/fi, not &&: a trailing failed test would make cmd_ifaces return 1
+        if [ -n "$speed" ] && [ "$speed" != "Unknown!" ]; then
             printf "  %-16s %s %s\n" "$iface" "$speed" "$duplex"
+        fi
     done
 }
 
@@ -85,7 +91,8 @@ cmd_conns() {
     fi
     header "Active Connections (top 30)"
     echo -e "${C_DIM}  PROTO  LOCAL                    REMOTE                   STATE        PID/PROGRAM${C_RESET}"
-    ss -tnp 2>/dev/null | tail -n +2 | head -30 | awk '{
+    # Producer wrapped in || true: head exiting early SIGPIPEs it (141 under pipefail)
+    { ss -tnp 2>/dev/null | tail -n +2 || true; } | head -30 | awk '{
         state=$1; local=$4; remote=$5; proc=$6
         gsub(/users:\(\("/, "", proc); gsub(/",pid=.*/, "", proc)
         printf "  TCP   %-24s %-24s %-12s %s\n", local, remote, state, proc
@@ -108,16 +115,18 @@ cmd_listen() {
     fi
     header "Listening Ports"
     echo -e "${C_DIM}  PROTO  ADDRESS                  PORT   PID/PROGRAM${C_RESET}"
-    (ss -tlnp 2>/dev/null; ss -ulnp 2>/dev/null) | tail -n +2 | sort -t: -k2 -n | \
-        awk '!seen[$4]++ {
-            proto=$1; addr=$4; proc=$6
+    # One ss call, no header (-H), with the Netid column so TCP and UDP on the
+    # same addr:port stay distinct: Netid State Recv-Q Send-Q Local Peer Process
+    ss -tulnpH 2>/dev/null | \
+        awk '!seen[$1 " " $5]++ {
+            proto=toupper($1); addr=$5; proc=$7
             gsub(/users:\(\("/, "", proc); gsub(/",pid=.*/, "", proc)
             split(addr, a, ":")
             port=a[length(a)]
-            sub(":"port, "", addr)
+            sub(":"port"$", "", addr)
             if (addr == "" || addr == "*") addr="0.0.0.0"
             printf "  %-5s %-24s %-6s %s\n", proto, addr, port, proc
-        }'
+        }' | sort -k3,3n -k1,1
 }
 
 cmd_dns() {
@@ -125,8 +134,8 @@ cmd_dns() {
         echo "### raw: dig google.com ###"
         dig google.com 2>/dev/null || echo "(dig not available)"
         echo ""
-        echo "### raw: dig kubernetes.default.svc ###"
-        dig kubernetes.default.svc 2>/dev/null || echo "(dig not available)"
+        echo "### raw: dig +search kubernetes.default.svc ###"
+        dig +search kubernetes.default.svc 2>/dev/null || echo "(dig not available)"
         echo ""
         echo "### raw: /etc/resolv.conf ###"
         cat /etc/resolv.conf
@@ -135,8 +144,12 @@ cmd_dns() {
     header "DNS Resolution Tests"
     local tests=("google.com" "kubernetes.default.svc" "1.1.1.1")
     for target in "${tests[@]}"; do
+        # dig ignores the resolv.conf search list unless +search (the cluster
+        # zone is svc.cluster.local); an IP needs a reverse (PTR) lookup
+        local args=(+short +search "$target")
+        [[ "$target" =~ ^[0-9.]+$ ]] && args=(+short -x "$target")
         local start=$(date +%s%N)
-        local result=$(dig +short "$target" 2>/dev/null | head -1)
+        local result=$(dig "${args[@]}" 2>/dev/null | head -1)
         local end=$(date +%s%N)
         local ms=$(( (end - start) / 1000000 ))
         if [ -n "$result" ]; then
@@ -173,10 +186,29 @@ cmd_reach() {
 
     # K8s API
     start=$(date +%s%N)
-    if curl -sk --max-time 5 -o /dev/null \
-        --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
-        -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null)" \
-        https://kubernetes.default.svc/api/v1 2>/dev/null; then
+    # The token goes in on stdin (-H @-), never on the command line, which
+    # /api/processes and every hostPID process can read. It is only sent to
+    # an API server verified against the SA CA; without that CA (or token)
+    # the probe is anonymous and unverified, against /healthz.
+    local sa=/var/run/secrets/kubernetes.io/serviceaccount
+    local api_host="${KUBERNETES_SERVICE_HOST:-}" api
+    case "$api_host" in
+        "") api="https://kubernetes.default.svc" ;;
+        \[*) api="https://${api_host}:${KUBERNETES_SERVICE_PORT:-443}" ;;
+        *:*) api="https://[${api_host}]:${KUBERNETES_SERVICE_PORT:-443}" ;;
+        *) api="https://${api_host}:${KUBERNETES_SERVICE_PORT:-443}" ;;
+    esac
+    local token=""
+    [ -f "$sa/ca.crt" ] && token=$(cat "$sa/token" 2>/dev/null || true)
+    local k8s_ok=0
+    if [ -n "$token" ]; then
+        printf 'Authorization: Bearer %s\n' "$token" | \
+            curl -sf --max-time 5 -o /dev/null --cacert "$sa/ca.crt" -H @- \
+            "${api}/api/v1" 2>/dev/null && k8s_ok=1
+    else
+        curl -sfk --max-time 5 -o /dev/null "${api}/healthz" 2>/dev/null && k8s_ok=1
+    fi
+    if [ "$k8s_ok" = 1 ]; then
         local ms=$(( ($(date +%s%N) - start) / 1000000 ))
         echo -e "  ${C_GREEN}✓${C_RESET} Kubernetes API      ${C_DIM}${ms}ms${C_RESET}"
     else
