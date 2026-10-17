@@ -152,12 +152,14 @@ def fsck_env(env):
         "blkid",
         """
 if [ "$1" = "-o" ] && [ "$2" = "device" ]; then
-    printf '/dev/sda\\n/dev/sda1\\n/dev/mapper/vg-lv\\n/dev/sdb1\\n'; exit 0
+    printf '/dev/sdz\\n/dev/sdz1\\n/dev/mapper/vg-lv\\n/dev/sdb1\\n'; exit 0
 fi
 dev="${@: -1}"
 case "$dev" in
-    /dev/sda) exit 2 ;;
-    /dev/sda1) echo vfat ;;
+    # A whole disk with no filesystem. Not a name _block_device() can pick:
+    # the repair tests point at a real device and expect ext4 for it.
+    /dev/sdz) exit 2 ;;
+    /dev/sdz1) echo vfat ;;
     /dev/mapper/vg-lv) echo ext4 ;;
     *) echo ext4 ;;
 esac""",
