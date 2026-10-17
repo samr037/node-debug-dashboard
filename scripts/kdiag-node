@@ -15,11 +15,11 @@ cmd_status() {
     fi
     header "Node Status — ${NODE_NAME}"
     local node_json
-    node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}")
+    node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}") || return 0
 
     # Roles
     local roles
-    roles=$(echo "$node_json" | jq -r '.metadata.labels | to_entries[] | select(.key | startswith("node-role.kubernetes.io/")) | .key | split("/")[1]' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
+    roles=$(echo "$node_json" | jq -r '.metadata.labels // {} | to_entries[] | select(.key | startswith("node-role.kubernetes.io/")) | .key | split("/")[1]' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
     echo -e "  Role:       ${C_BOLD}${roles:-worker}${C_RESET}"
 
     # Kubernetes version
@@ -66,36 +66,36 @@ cmd_resources() {
     fi
     header "Resource Allocation — ${NODE_NAME}"
     local node_json
-    node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}")
+    node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}") || return 0
 
     echo -e "  ${C_DIM}RESOURCE       CAPACITY     ALLOCATABLE   USED BY PODS${C_RESET}"
 
     # Get pod resource requests on this node
     local pods_json
-    pods_json=$(k8s_api "/api/v1/pods?fieldSelector=spec.nodeName=${NODE_NAME},status.phase=Running")
+    pods_json=$(k8s_api "/api/v1/pods?fieldSelector=spec.nodeName=${NODE_NAME},status.phase=Running") || return 0
 
     local cpu_req mem_req gpu_req pod_count
-    cpu_req=$(echo "$pods_json" | jq '[.items[]?.spec.containers[]?.resources.requests.cpu // "0" | if endswith("m") then (.[:-1] | tonumber) else (tonumber * 1000) end] | add // 0' 2>/dev/null)
-    mem_req=$(echo "$pods_json" | jq '[.items[]?.spec.containers[]?.resources.requests.memory // "0" | if endswith("Mi") then (.[:-2] | tonumber * 1048576) elif endswith("Gi") then (.[:-2] | tonumber * 1073741824) elif endswith("Ki") then (.[:-2] | tonumber * 1024) else tonumber end] | add // 0' 2>/dev/null)
-    gpu_req=$(echo "$pods_json" | jq '[.items[]?.spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add // 0' 2>/dev/null)
-    pod_count=$(echo "$pods_json" | jq '.items | length' 2>/dev/null)
+    # Every quantity suffix (M, G, Ki, Mi...) goes through qty: a bare tonumber
+    # aborted the whole script on "512M" under set -e. Integers for bash math.
+    cpu_req=$(echo "$pods_json" | jq "${JQ_QTY}"'[.items[]?.spec.containers[]?.resources.requests.cpu // "0" | qty * 1000] | add // 0 | round' 2>/dev/null) || true
+    mem_req=$(echo "$pods_json" | jq "${JQ_QTY}"'[.items[]?.spec.containers[]?.resources.requests.memory // "0" | qty] | add // 0 | round' 2>/dev/null) || true
+    gpu_req=$(echo "$pods_json" | jq "${JQ_QTY}"'[.items[]?.spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | qty] | add // 0 | round' 2>/dev/null) || true
+    pod_count=$(echo "$pods_json" | jq '.items | length' 2>/dev/null) || true
+    cpu_req=${cpu_req:-0}; mem_req=${mem_req:-0}; gpu_req=${gpu_req:-0}; pod_count=${pod_count:-0}
 
     # Capacity & allocatable
     local cpu_cap cpu_alloc mem_cap mem_alloc pod_cap gpu_cap
     cpu_cap=$(echo "$node_json" | jq -r '.status.capacity.cpu // "0"' 2>/dev/null)
     cpu_alloc=$(echo "$node_json" | jq -r '.status.allocatable.cpu // "0"' 2>/dev/null)
-    mem_cap=$(echo "$node_json" | jq -r '.status.capacity.memory // "0" | if endswith("Ki") then (.[:-2] | tonumber * 1024) else tonumber end' 2>/dev/null)
-    mem_alloc=$(echo "$node_json" | jq -r '.status.allocatable.memory // "0" | if endswith("Ki") then (.[:-2] | tonumber * 1024) else tonumber end' 2>/dev/null)
+    mem_cap=$(echo "$node_json" | jq -r "${JQ_QTY}"'.status.capacity.memory // "0" | qty | round' 2>/dev/null) || true
+    mem_alloc=$(echo "$node_json" | jq -r "${JQ_QTY}"'.status.allocatable.memory // "0" | qty | round' 2>/dev/null) || true
     pod_cap=$(echo "$node_json" | jq -r '.status.allocatable.pods // "110"' 2>/dev/null)
     gpu_cap=$(echo "$node_json" | jq -r '.status.capacity["nvidia.com/gpu"] // "0"' 2>/dev/null)
 
     # Convert allocatable CPU to millicores
     local cpu_alloc_m
-    if [[ "$cpu_alloc" == *m ]]; then
-        cpu_alloc_m=${cpu_alloc%m}
-    else
-        cpu_alloc_m=$((cpu_alloc * 1000))
-    fi
+    cpu_alloc_m=$(jq -rn --arg q "$cpu_alloc" "${JQ_QTY}"'$q | qty * 1000 | round' 2>/dev/null) || true
+    cpu_alloc_m=${cpu_alloc_m:-0}
 
     # CPU
     local cpu_pct=0
@@ -136,7 +136,7 @@ cmd_taints() {
     fi
     header "Taints & Labels — ${NODE_NAME}"
     local node_json
-    node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}")
+    node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}") || return 0
 
     echo -e "  ${C_BOLD}Taints:${C_RESET}"
     local taints
@@ -149,12 +149,13 @@ cmd_taints() {
 
     echo ""
     echo -e "  ${C_BOLD}Labels:${C_RESET}"
-    echo "$node_json" | jq -r '.metadata.labels | to_entries[] | "  \(.key) = \(.value)"' 2>/dev/null | \
-        grep -v 'kubernetes.io/os\|kubernetes.io/arch\|kubernetes.io/hostname' | sort
+    # grep exits 1 when only default labels exist; under pipefail that aborted the script
+    echo "$node_json" | jq -r '.metadata.labels // {} | to_entries[] | "  \(.key) = \(.value)"' 2>/dev/null | \
+        { grep -v 'kubernetes.io/os\|kubernetes.io/arch\|kubernetes.io/hostname' || true; } | sort
 
     echo ""
     echo -e "  ${C_BOLD}Annotations (non-default):${C_RESET}"
-    echo "$node_json" | jq -r '.metadata.annotations | to_entries[] | select(.key | startswith("node.alpha") or startswith("volumes") | not) | "  \(.key | split("/") | .[-1]) = \(.value[:60])"' 2>/dev/null | head -15
+    echo "$node_json" | jq -r '.metadata.annotations // {} | to_entries[] | select(.key | startswith("node.alpha") or startswith("volumes") | not) | "  \(.key | split("/") | .[-1]) = \(.value[:60])"' 2>/dev/null | head -15
 }
 
 cmd_pressure() {
@@ -195,7 +196,7 @@ cmd_pressure() {
     echo ""
     header "K8s Pressure Conditions"
     local node_json
-    node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}")
+    node_json=$(k8s_api "/api/v1/nodes/${NODE_NAME}") || return 0
     echo "$node_json" | jq -r '.status.conditions[]? | select(.type | test("Pressure|PID")) | "\(.type): \(.status) — \(.message // "no message")"' 2>/dev/null | \
     while read -r line; do
         if echo "$line" | grep -q "True"; then
@@ -216,7 +217,9 @@ cmd_kubelet() {
 
     # Kubelet process
     local kubelet_pid
-    kubelet_pid=$(pgrep -f kubelet 2>/dev/null | head -1)
+    # Exact process name: `pgrep -f kubelet` matched this script ("kdiag-node kubelet"),
+    # the apiserver (--kubelet-*), CSI registrars and shims, so a dead kubelet looked alive
+    kubelet_pid=$(pgrep -x kubelet 2>/dev/null | head -1) || true
     if [ -n "$kubelet_pid" ]; then
         ok "Kubelet running (PID ${kubelet_pid})"
         local kubelet_mem
@@ -235,7 +238,7 @@ cmd_kubelet() {
     echo -e "  ${C_BOLD}Component Health:${C_RESET}"
     for component in kubelet kube-proxy; do
         local pid
-        pid=$(pgrep -f "$component" 2>/dev/null | head -1)
+        pid=$(pgrep -x "$component" 2>/dev/null | head -1) || true
         if [ -n "$pid" ]; then
             local mem
             mem=$(ps -p "$pid" -o rss= 2>/dev/null | awk '{printf "%.0f", $1/1024}')
@@ -254,7 +257,7 @@ cmd_kubelet() {
             local name
             name=$(basename "$manifest" .yaml)
             local running
-            running=$(crictl ps --name "$name" -q 2>/dev/null | head -1)
+            running=$(crictl ps --name "$name" -q 2>/dev/null | head -1) || true
             if [ -n "$running" ]; then
                 ok "$name"
             else

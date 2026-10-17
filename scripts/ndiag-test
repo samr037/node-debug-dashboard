@@ -193,18 +193,18 @@ run_test "kdiag-events ns default"
 run_test "kdiag-events --raw node"
 run_test "kdiag-events --help"
 
-# ── Shell aliases (disable pipefail to avoid SIGPIPE from head) ──
+# ── Shell aliases ──
+# No "| head": run_test discards the output anyway, and with pipefail off the
+# exit code was head's, so a missing binary/socket/dir still showed OK.
 section "Shell aliases"
-set +o pipefail
-run_test "crictl ps 2>/dev/null | head -3"
-run_test "ss -tlnp | head -3"
-run_test "ip -c -br addr | head -3"
-run_test "ps aux --sort=-%mem | head -3"
-run_test "df -h | head -3"
-run_test "lsblk -dno NAME | head -3"
+run_test "crictl ps"
+run_test "ss -tlnp"
+run_test "ip -c -br addr"
+run_test "ps aux --sort=-%mem"
+run_test "df -h"
+run_test "lsblk -dno NAME"
 run_test "cat /host-proc/loadavg"
-run_test "ls /host/var/log/pods/ | head -3"
-set -o pipefail
+run_test "ls /host/var/log/pods/"
 
 # ── Summary ──
 TOTAL=$((PASS + FAIL))

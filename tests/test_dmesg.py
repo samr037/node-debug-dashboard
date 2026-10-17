@@ -115,7 +115,8 @@ def test_warning_includes_the_matching_line():
 def test_events_outside_the_window_are_dropped():
     """A fault at boot should stop alerting, not persist until reboot."""
     now = datetime.now(timezone.utc)
-    old = (now - timedelta(days=30)).isoformat()
+    # timespec pinned: isoformat() drops the fraction when microsecond == 0.
+    old = (now - timedelta(days=30)).isoformat(timespec="microseconds")
     line = f"{old} blk_update_request: I/O error, dev sda, sector 1"
 
     assert scan([line], cutoff=now - timedelta(hours=24)) == []
@@ -124,7 +125,7 @@ def test_events_outside_the_window_are_dropped():
 
 def test_recent_events_are_kept():
     now = datetime.now(timezone.utc)
-    recent = (now - timedelta(minutes=5)).isoformat()
+    recent = (now - timedelta(minutes=5)).isoformat(timespec="microseconds")
     line = f"{recent} blk_update_request: I/O error, dev sda, sector 1"
     assert len(scan([line], cutoff=now - timedelta(hours=24))) == 1
 

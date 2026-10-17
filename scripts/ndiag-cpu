@@ -21,12 +21,13 @@ header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
 cmd_top() {
     if [ "$RAW" = "1" ]; then
         echo "### raw: ps aux sorted by CPU ###"
-        ps aux --sort=-%cpu | head -20
+        # || true: ps gets SIGPIPE when head exits early (141 under pipefail)
+        { ps aux --sort=-%cpu || true; } | head -20
         return
     fi
     header "Top CPU Consumers"
     echo -e "${C_DIM}  PID     USER      %CPU  %MEM  COMMAND${C_RESET}"
-    ps -eo pid,user,%cpu,%mem,comm --sort=-%cpu 2>/dev/null | head -16 | tail -15 | \
+    { ps -eo pid,user,%cpu,%mem,comm --sort=-%cpu 2>/dev/null || true; } | head -16 | tail -15 | \
         awk '{printf "  %-7s %-9s %5s %5s  %s\n", $1, $2, $3, $4, $5}'
     echo ""
     echo -e "${C_DIM}  CPU count: $(grep -c ^processor ${HOST_PROC}/cpuinfo 2>/dev/null || echo '?')${C_RESET}"

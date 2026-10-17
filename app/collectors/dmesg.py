@@ -19,7 +19,9 @@ from app.models.warnings import NodeWarning
 _MONOTONIC_RE = re.compile(r"^\[\s*(\d+\.\d+)\]\s*(.*)$")
 # Leading ISO stamp from `dmesg --time-format iso`.
 _ISO_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[,.]\d+[+-]\d{2}:?\d{2})\s*(.*)$"
+    # The fraction is optional: util-linux always prints it, but whole-second
+    # stamps (isoformat() with microsecond == 0, other tools) must age out too.
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[,.]\d+)?[+-]\d{2}:?\d{2})\s*(.*)$"
 )
 
 
@@ -38,30 +40,50 @@ class Rule:
         return any(re.search(p, message, re.IGNORECASE) for p in self.patterns)
 
 
+# "mce: CPU supports N MCE banks" is the driver reporting capability.
+_MCE_BANNERS = (
+    r"mce:\s*CPU\d*\s*supports",
+    r"mce:\s*Machine check.*(enabled|initialized)",
+    r"no mce",
+)
+
 RULES: tuple[Rule, ...] = (
     Rule(
         source="memory",
         severity="critical",
         label="Machine check exceptions",
+        # Only what the hardware could not correct. The kernel logs
+        # "mce: [Hardware Error]: Machine check events logged" and decodes a
+        # "CPU N: Machine Check: 0 Bank B" record for every MCE, corrected
+        # (CMCI) ones included; those go to the warning rule below.
+        patterns=(
+            r"Machine Check Exception",
+            r"Fatal machine check",
+            r"Processor context corrupt",
+            r"Uncorrected hardware memory error",
+            r"\bmce:.*Action required",
+            r"\bMCE\b.*\b(uncorrected|fatal)\b",
+        ),
+        excludes=_MCE_BANNERS,
+    ),
+    Rule(
+        source="memory",
+        severity="warning",
+        label="Machine check events",
         patterns=(
             r"\bmce:.*hardware error",
             r"machine check events logged",
-            r"CPU\d+: Machine Check",
-            r"\bMCE\b.*\b(uncorrected|fatal)\b",
+            r"CPU\s*\d+: Machine Check\b",
         ),
-        # "mce: CPU supports N MCE banks" is the driver reporting capability.
-        excludes=(
-            r"mce:\s*CPU\d*\s*supports",
-            r"mce:\s*Machine check.*(enabled|initialized)",
-            r"no mce",
-        ),
+        excludes=_MCE_BANNERS,
     ),
     Rule(
         source="memory",
         severity="critical",
         label="Uncorrectable ECC errors",
         patterns=(r"\b\d+\s+UE\b", r"uncorrected error", r"uncorrectable error"),
-        excludes=(r"\b0\s+UE\b",),
+        # PCIe AER uses the same words for link errors; see the pcie rules.
+        excludes=(r"\b0\s+UE\b", r"\bAER:", r"PCIe Bus Error"),
     ),
     Rule(
         source="memory",
@@ -75,6 +97,10 @@ RULES: tuple[Rule, ...] = (
             r"EDAC MC:\s*Ver",
             r"no ecc support",
             r"EDAC.*giving out device",
+            # "pcieport ...: AER: Corrected error received" is a PCIe link
+            # event, not RAM.
+            r"\bAER:",
+            r"PCIe Bus Error",
         ),
     ),
     Rule(
@@ -128,6 +154,30 @@ RULES: tuple[Rule, ...] = (
             r"exception Emask",
             r"SCSI error.*return code",
             r"rejecting I/O to offline device",
+        ),
+        # Probing an empty virtual CD drive (Proxmox adds one by default),
+        # a floppy or a detached loop device is not a failing disk.
+        excludes=(r"\bdev (sr|fd|loop)\d+",),
+    ),
+    Rule(
+        source="pcie",
+        severity="critical",
+        label="PCIe uncorrected errors (AER)",
+        patterns=(
+            r"\bAER:.*Uncorrect",
+            r"\bAER:.*\bFatal\b",
+            r"PCIe Bus Error: severity=Uncorrect",
+        ),
+    ),
+    Rule(
+        source="pcie",
+        severity="warning",
+        label="PCIe corrected errors (AER)",
+        patterns=(
+            # "Corrected error received" before Linux 6.x, "Correctable
+            # error message received" since.
+            r"\bAER:.*\bCorrect(ed|able) error",
+            r"PCIe Bus Error: severity=Correct",
         ),
     ),
 )

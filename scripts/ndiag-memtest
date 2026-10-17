@@ -6,6 +6,7 @@
 set -euo pipefail
 
 RAW=0
+YES=0
 
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
@@ -15,15 +16,111 @@ C_YELLOW="\033[33m"
 C_RED="\033[31m"
 C_DIM="\033[2m"
 HOST_PROC="${HOST_PROC:-/host-proc}"
+CGROUP_DIR="${CGROUP_DIR:-/sys/fs/cgroup}"
 
 header() { echo -e "\n${C_BOLD}${C_CYAN}── $1 ──${C_RESET}\n"; }
 
 _get_free_mb() {
-    awk '/^MemAvailable:/{printf "%.0f", $2/1024}' "${HOST_PROC}/meminfo" 2>/dev/null || echo "256"
+    local v
+    v=$(awk '/^MemAvailable:/{printf "%.0f", $2/1024}' "${HOST_PROC}/meminfo" 2>/dev/null) || true
+    # Outside the pod (no /host-proc), our /proc/meminfo is the host's too
+    [[ "$v" =~ ^[0-9]+$ ]] || { v=$(awk '/^MemAvailable:/{printf "%.0f", $2/1024}' /proc/meminfo 2>/dev/null) || true; }
+    [[ "$v" =~ ^[0-9]+$ ]] && echo "$v" || echo "256"
+}
+
+# Headroom left in this container's memory cgroup, in MB (empty = no limit).
+# memtester/stress-ng run inside the pod's cgroup, so the pod limit (1Gi by
+# default), not the host's MemAvailable, is what gets them OOM-killed.
+_get_cgroup_headroom_mb() {
+    local max="" cur="" dir="$CGROUP_DIR" rel=""
+    # Private cgroup namespace: our cgroup is the mount root. Host cgroupns
+    # (some privileged setups): the root has no memory.max, so resolve our
+    # own cgroup path from /proc/self/cgroup ("0::/kubepods/...").
+    if [ ! -r "${dir}/memory.max" ]; then
+        rel=$(awk -F: '$1=="0"{print $3; exit}' "${SELF_CGROUP:-/proc/self/cgroup}" 2>/dev/null) || true
+        if [ -n "$rel" ] && [ -r "${CGROUP_DIR}${rel}/memory.max" ]; then
+            dir="${CGROUP_DIR}${rel}"
+        fi
+    fi
+    if [ -r "${dir}/memory.max" ]; then                              # cgroup v2
+        max=$(cat "${dir}/memory.max" 2>/dev/null) || true
+        cur=$(cat "${dir}/memory.current" 2>/dev/null) || true
+    elif [ -r "${CGROUP_DIR}/memory/memory.limit_in_bytes" ]; then   # cgroup v1
+        max=$(cat "${CGROUP_DIR}/memory/memory.limit_in_bytes" 2>/dev/null) || true
+        cur=$(cat "${CGROUP_DIR}/memory/memory.usage_in_bytes" 2>/dev/null) || true
+    fi
+    [[ "$max" =~ ^[0-9]+$ ]] || return 0                 # "max" or unreadable
+    [ "${#max}" -ge 19 ] && return 0                     # v1 "unlimited" (~2^63)
+    [[ "$cur" =~ ^[0-9]+$ ]] || cur=0
+    local mb=$(( (max - cur) / 1048576 ))
+    [ "$mb" -lt 0 ] && mb=0
+    echo "$mb"
+}
+
+# Largest test size in MB: host MemAvailable minus 1GB, capped by the pod
+# cgroup headroom minus 128MB (left for uvicorn/sshd in the same cgroup)
+_get_safe_mb() {
+    local free cg safe
+    free=$(_get_free_mb)
+    cg=$(_get_cgroup_headroom_mb)
+    safe=$((free - 1024))
+    if [ -n "$cg" ] && [ "$((cg - 128))" -lt "$safe" ]; then
+        safe=$((cg - 128))
+    fi
+    [ "$safe" -lt 0 ] && safe=0
+    echo "$safe"
+}
+
+# Refuse a test size that does not fit (exits)
+_check_size() {
+    local size_mb="$1" safe="$2"
+    if ! [[ "$size_mb" =~ ^[0-9]+$ ]] || { [ "$size_mb" -eq 0 ] && [ "$safe" -gt 0 ]; }; then
+        echo -e "${C_RED}Invalid size: ${size_mb} (expected MB, e.g. 256)${C_RESET}" >&2
+        exit 1
+    fi
+    if [ "$size_mb" -gt "$safe" ] || [ "$safe" -eq 0 ]; then
+        echo -e "${C_RED}Refusing: ${size_mb} MB is above the safe size of ${safe} MB${C_RESET}" >&2
+        echo -e "${C_DIM}(host MemAvailable - 1GB, capped by pod memory limit headroom - 128MB)${C_RESET}" >&2
+        exit 1
+    fi
+}
+
+# Ask before heavy tests; non-interactive callers must pass --yes (exits)
+_confirm() {
+    [ "$YES" = "1" ] && return 0
+    if [ ! -t 0 ]; then
+        echo -e "${C_RED}Refusing to run '$1' non-interactively without --yes${C_RESET}" >&2
+        exit 1
+    fi
+    local answer=""
+    read -r -p "  Run $1? [y/N] " answer || true
+    [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]] || { echo "  Aborted."; exit 1; }
+}
+
+# Print memtester results; non-zero if errors found or memtester did not finish
+_memtester_report() {
+    local result="$1" rc="$2"
+    local errors
+    errors=$(echo "$result" | grep -c "FAILURE" 2>/dev/null) || errors=0
+    echo "$result" | grep -E "Loop|Stuck|ok|FAILURE" | sed 's/^/  /' || true
+
+    echo ""
+    if [ "$errors" -gt 0 ]; then
+        echo -e "  ${C_RED}${C_BOLD}MEMORY ERRORS DETECTED: ${errors} failures${C_RESET}"
+        return 1
+    elif [ "$rc" -ne 0 ]; then
+        local why=""
+        [ "$rc" -eq 137 ] && why=" — killed (SIGKILL), likely OOM in the pod cgroup"
+        echo -e "  ${C_RED}${C_BOLD}Test did NOT complete (memtester exit ${rc}${why})${C_RESET}"
+        return 1
+    fi
+    echo -e "  ${C_GREEN}All tests passed${C_RESET}"
 }
 
 cmd_quick() {
     local size_mb="${1:-256}"
+    local safe=$(_get_safe_mb)
+    _check_size "$size_mb" "$safe"
     if [ "$RAW" = "1" ]; then
         echo "### raw: memtester ${size_mb}M 1 ###"
         memtester "${size_mb}M" 1 2>&1 || true
@@ -32,36 +129,30 @@ cmd_quick() {
 
     local free=$(_get_free_mb)
     header "Quick Memory Test — ${size_mb} MB"
-    echo -e "  Available RAM: ${C_BOLD}${free} MB${C_RESET}"
+    echo -e "  Available RAM: ${C_BOLD}${free} MB${C_RESET} (safe max for this pod: ${safe} MB)"
     echo -e "  Test size:     ${C_BOLD}${size_mb} MB${C_RESET} (1 pass)"
-
-    if [ "$size_mb" -gt "$((free - 512))" ] 2>/dev/null; then
-        echo -e "  ${C_RED}Warning: Test size close to available RAM — may trigger OOM${C_RESET}"
-    fi
 
     echo ""
     echo -e "  ${C_DIM}Running: memtester ${size_mb}M 1${C_RESET}"
     echo -e "  ${C_DIM}Press Ctrl+C to abort${C_RESET}"
     echo ""
 
-    local result
-    result=$(memtester "${size_mb}M" 1 2>&1) || true
-
-    local errors
-    errors=$(echo "$result" | grep -c "FAILURE" 2>/dev/null) || errors=0
-    echo "$result" | grep -E "Loop|Stuck|ok|FAILURE" | sed 's/^/  /'
-
-    echo ""
-    if [ "$errors" -gt 0 ]; then
-        echo -e "  ${C_RED}${C_BOLD}MEMORY ERRORS DETECTED: ${errors} failures${C_RESET}"
-    else
-        echo -e "  ${C_GREEN}All tests passed${C_RESET}"
-    fi
+    local result rc=0
+    result=$(memtester "${size_mb}M" 1 2>&1) || rc=$?
+    _memtester_report "$result" "$rc"
 }
 
 cmd_stress() {
-    local size_mb="${1:-1024}"
+    local safe=$(_get_safe_mb)
+    local size_mb="${1:-}"
     local duration="${2:-60}"
+    # Default 1024 MB, shrunk to fit the pod memory limit
+    if [ -z "$size_mb" ]; then
+        size_mb=1024
+        [ "$safe" -lt "$size_mb" ] && size_mb="$safe"
+    fi
+    _check_size "$size_mb" "$safe"
+    _confirm "stress-ng on ${size_mb} MB for ${duration}s"
     if [ "$RAW" = "1" ]; then
         echo "### raw: stress-ng --vm 1 --vm-bytes ${size_mb}M --vm-keep -t ${duration}s --metrics ###"
         stress-ng --vm 1 --vm-bytes "${size_mb}M" --vm-keep -t "${duration}s" --metrics 2>&1 || true
@@ -78,16 +169,25 @@ cmd_stress() {
     echo -e "  ${C_DIM}Press Ctrl+C to abort${C_RESET}"
     echo ""
 
-    stress-ng --vm 1 --vm-bytes "${size_mb}M" --vm-keep -t "${duration}s" --metrics 2>&1 | sed 's/^/  /' || true
+    local rc=0
+    stress-ng --vm 1 --vm-bytes "${size_mb}M" --vm-keep -t "${duration}s" --metrics 2>&1 | sed 's/^/  /' || rc=$?
 
     echo ""
+    if [ "$rc" -ne 0 ]; then
+        echo -e "  ${C_RED}${C_BOLD}Stress test did NOT complete cleanly (stress-ng exit ${rc})${C_RESET}"
+        return 1
+    fi
     echo -e "  ${C_GREEN}Stress test completed${C_RESET}"
 }
 
 cmd_full() {
     local free=$(_get_free_mb)
-    local test_mb=$((free - 1024))  # Leave 1GB headroom
-    [ "$test_mb" -lt 512 ] && test_mb=512
+    local test_mb=$(_get_safe_mb)  # Host minus 1GB, capped by pod cgroup headroom
+    if [ "$test_mb" -lt 64 ]; then
+        echo -e "${C_RED}Refusing: only ${test_mb} MB can be tested safely (host avail ${free} MB, pod memory limit)${C_RESET}" >&2
+        exit 1
+    fi
+    _confirm "memtester on ${test_mb} MB (slow)"
 
     if [ "$RAW" = "1" ]; then
         echo "### raw: memtester ${test_mb}M 1 ###"
@@ -97,7 +197,7 @@ cmd_full() {
 
     header "Full Memory Test — ${test_mb} MB"
     echo -e "  Available RAM: ${C_BOLD}${free} MB${C_RESET}"
-    echo -e "  Test size:     ${C_BOLD}${test_mb} MB${C_RESET} (max safe, leaving 1GB headroom)"
+    echo -e "  Test size:     ${C_BOLD}${test_mb} MB${C_RESET} (max safe within host and pod memory limit)"
     echo -e "  Passes:        1"
     echo ""
     echo -e "  ${C_RED}${C_BOLD}WARNING: This will take a LONG time (hours for large RAM)${C_RESET}"
@@ -105,19 +205,9 @@ cmd_full() {
     echo -e "  ${C_DIM}Press Ctrl+C to abort${C_RESET}"
     echo ""
 
-    local result
-    result=$(memtester "${test_mb}M" 1 2>&1) || true
-
-    local errors
-    errors=$(echo "$result" | grep -c "FAILURE" 2>/dev/null) || errors=0
-    echo "$result" | grep -E "Loop|Stuck|ok|FAILURE" | sed 's/^/  /'
-
-    echo ""
-    if [ "$errors" -gt 0 ]; then
-        echo -e "  ${C_RED}${C_BOLD}MEMORY ERRORS DETECTED: ${errors} failures${C_RESET}"
-    else
-        echo -e "  ${C_GREEN}All tests passed${C_RESET}"
-    fi
+    local result rc=0
+    result=$(memtester "${test_mb}M" 1 2>&1) || rc=$?
+    _memtester_report "$result" "$rc"
 }
 
 cmd_ecc() {
@@ -183,35 +273,45 @@ USAGE
 
 SUBCOMMANDS
     quick [MB]            Quick test (default 256 MB, 1 pass)
-    stress [MB] [secs]    Stress test with stress-ng (default 1024 MB, 60s)
+    stress [MB] [secs]    Stress test with stress-ng (default 1024 MB or less, 60s)
     full                  Full test (max safe RAM, 1 pass — SLOW)
     ecc                   Check ECC status, EDAC counters, kernel errors
 
 OPTIONS
     --raw, -r  Output raw underlying commands
+    --yes, -y  Skip the confirmation prompt for 'stress' and 'full'
 
 SAFETY
     - 'ecc' is read-only and instant
     - 'quick' tests a small amount of RAM (fast, safe)
     - 'stress' continuously writes patterns for a duration
     - 'full' tests almost all available RAM — system will be slow
-    - All tests leave 1GB headroom to avoid OOM
+    - Test sizes are capped to host MemAvailable - 1GB AND to the pod's
+      memory limit headroom - 128MB (the tests run inside the pod cgroup);
+      larger sizes are refused
+    - 'stress' and 'full' ask for confirmation (--yes when non-interactive)
 
 EXAMPLES
     ndiag-memtest ecc              # Check for ECC errors (instant)
     ndiag-memtest quick            # Quick 256MB test (~30s)
-    ndiag-memtest quick 1024       # Test 1GB
-    ndiag-memtest stress 2048 120  # Stress 2GB for 2 minutes
+    ndiag-memtest quick 512        # Test 512MB
+    ndiag-memtest stress 512 120   # Stress 512MB for 2 minutes
     ndiag-memtest full             # Full test (WARNING: very slow)
 EOF
 }
 
-# Parse --raw flag
-[[ "${1:-}" == "--raw" || "${1:-}" == "-r" ]] && RAW=1 && shift
+# Parse --raw / --yes flags
+while [[ "${1:-}" == -* ]]; do
+    case "$1" in
+        --raw|-r) RAW=1; shift ;;
+        --yes|-y) YES=1; shift ;;
+        *) break ;;
+    esac
+done
 
 case "${1:-ecc}" in
     quick)   cmd_quick "${2:-256}" ;;
-    stress)  cmd_stress "${2:-1024}" "${3:-60}" ;;
+    stress)  cmd_stress "${2:-}" "${3:-60}" ;;
     full)    cmd_full ;;
     ecc)     cmd_ecc ;;
     -h|--help|help) show_help ;;

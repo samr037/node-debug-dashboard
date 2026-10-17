@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 
@@ -8,6 +9,8 @@ from app.config import HOST_ROOT, HOST_SYS
 from app.httpclient import (
     bearer,
     insecure_client,
+    kubernetes_api_base,
+    kubernetes_client,
     public_client,
     read_service_account_token,
 )
@@ -97,26 +100,71 @@ async def collect_nics() -> list[NICInfo]:
     return nics
 
 
+def _parse_nameservers(resolv: str) -> list[str]:
+    servers: list[str] = []
+    for line in resolv.splitlines():
+        parts = line.split()
+        # A bare "nameserver" line has no address; skip it.
+        if len(parts) >= 2 and parts[0] == "nameserver":
+            servers.append(parts[1])
+    return servers
+
+
+async def _dig(server: str | None) -> str:
+    """First A record for google.com from `server` (or the pod's resolver)."""
+    cmd = ["dig", "+short", "+time=2", "+tries=1", "google.com"]
+    if server:
+        cmd.insert(1, server)
+    stdout, _, rc = await run_command(cmd)
+    if rc != 0:
+        return ""
+    for line in stdout.splitlines():
+        if line.strip() and line.strip()[0].isdigit():
+            return line.strip()
+    return ""
+
+
+def _parse_default_gateway(stdout: str) -> str:
+    """Gateway(s) out of `ip route show default`.
+
+    Handles "default via X dev Y", ECMP routes whose gateways sit on
+    "nexthop via X" lines, and device-only routes ("default dev wg0"),
+    which have no gateway address at all.
+    """
+    tokens = stdout.split()
+    gateways: list[str] = []
+    for prev, tok in zip(tokens, tokens[1:]):
+        if prev == "via" and tok not in gateways:
+            gateways.append(tok)
+    if gateways:
+        return ", ".join(gateways)
+    for prev, tok in zip(tokens, tokens[1:]):
+        if prev == "dev":
+            return f"dev {tok}"
+    return ""
+
+
 @ttl_cache()
 async def collect_connectivity() -> dict:
     # DNS config
     resolv = await read_file(f"{HOST_ROOT}/etc/resolv.conf")
-    dns_servers = [
-        line.split()[1]
-        for line in resolv.splitlines()
-        if line.strip().startswith("nameserver")
-    ]
+    dns_servers = _parse_nameservers(resolv)
 
-    # DNS resolution
+    # DNS resolution, against the host nameservers listed above. A bare
+    # `dig` uses the pod's resolv.conf, which with ClusterFirstWithHostNet
+    # is CoreDNS, so "OK" used to sit next to servers it never tested.
     dns_ok = False
     dns_result = ""
-    stdout, _, rc = await run_command(["dig", "+short", "google.com"])
-    if rc == 0 and stdout.strip():
-        for line in stdout.splitlines():
-            if line.strip() and line.strip()[0].isdigit():
-                dns_result = line.strip()
-                dns_ok = True
-                break
+    dns_failed_servers: list[str] = []
+    targets = [f"@{s}" for s in dns_servers] or [None]
+    results = await asyncio.gather(*(_dig(t) for t in targets))
+    for target, answer in zip(targets, results):
+        if answer:
+            if not dns_ok:
+                dns_result = answer
+            dns_ok = True
+        elif target is not None:
+            dns_failed_servers.append(target[1:])
 
     # Internet
     internet_ok = False
@@ -130,34 +178,37 @@ async def collect_connectivity() -> dict:
 
     # K8s API
     k8s_ok = False
-    k8s_host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
-    k8s_port = os.environ.get("KUBERNETES_SERVICE_PORT", "")
-    if k8s_host:
-        # /healthz is not an anonymous endpoint; without the service account
-        # token this probe got a 401 and always reported the API unreachable.
+    if os.environ.get("KUBERNETES_SERVICE_HOST", ""):
+        # /healthz is not always an anonymous endpoint, so the service
+        # account token is sent, but only over a client that verifies the
+        # API server against the SA CA. Without that CA (or without a
+        # token) the probe goes out anonymously and unverified, never with
+        # the token: insecure_client() must not carry it.
         try:
             token = await read_service_account_token()
-            response = await insecure_client().get(
-                f"https://{k8s_host}:{k8s_port}/healthz",
+            client = kubernetes_client() if token else None
+            if client is None:
+                client, token = insecure_client(), ""
+            response = await client.get(
+                f"{kubernetes_api_base()}/healthz",
                 timeout=5,
                 headers=bearer(token),
             )
-            k8s_ok = response.text.strip().lower() == "ok"
+            k8s_ok = (
+                response.status_code == 200 and response.text.strip().lower() == "ok"
+            )
         except httpx.HTTPError:
             k8s_ok = False
 
     # Default gateway
     stdout, _, rc = await run_command(["ip", "route", "show", "default"])
-    gateway = ""
-    if rc == 0:
-        parts = stdout.split()
-        if len(parts) >= 3:
-            gateway = parts[2]
+    gateway = _parse_default_gateway(stdout) if rc == 0 else ""
 
     return {
         "dns_servers": dns_servers,
         "dns_ok": dns_ok,
         "dns_result": dns_result,
+        "dns_failed_servers": dns_failed_servers,
         "internet_ok": internet_ok,
         "kubernetes_api_ok": k8s_ok,
         "default_gateway": gateway,

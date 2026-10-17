@@ -40,38 +40,90 @@ let lastData = null;
 const FAST_SECTIONS = ['node', 'hardware', 'warnings', 'containers', 'cluster_nodes'];
 const SLOW_SECTIONS = ['kubernetes', 'talos', 'storage', 'system', 'network', 'processes'];
 
-async function fetchSection(name) {
+// Upper bound for one section request. The slowest collectors (smartctl,
+// crictl) time out at 15s on the server, so anything past this is a hung
+// connection and would otherwise hold the refresh cycle forever.
+const SECTION_TIMEOUT_MS = 30000;
+
+// Returns the section payload, or null after recording why in `failures`.
+async function fetchSection(name, failures) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), SECTION_TIMEOUT_MS);
     try {
-        const resp = await fetch(`/api/sections/${name}`);
-        if (!resp.ok) return null;
-        return await resp.json();
-    } catch {
+        const resp = await fetch(`/api/sections/${name}`, { signal: ctrl.signal });
+        if (!resp.ok) {
+            failures.push({ name, status: resp.status });
+            return null;
+        }
+        const body = await resp.json();
+        // Aggregate sections (hardware, network) still answer 200 when one
+        // of their collectors fails, with that field null/empty and its name
+        // in `errors`.
+        for (const e of body?.errors || []) failures.push({ name: `${name}/${e}`, status: 'collector failed' });
+        return body;
+    } catch (err) {
+        failures.push({ name, status: err.name === 'AbortError' ? 'timeout' : 'network error' });
         return null;
+    } finally {
+        clearTimeout(t);
     }
 }
 
-async function fetchOverview() {
-    try {
-        const openState = isFirstRender ? {} : saveOpenState();
-        const scrollY = window.scrollY;
+// Role shown in the header. Kept across refreshes so a cycle that lacks
+// the data does not fall back to a wrong default.
+let nodeRole = null;
 
+function renderHeader(node) {
+    const badge = nodeRole
+        ? ` <span class="role-badge ${nodeRole === 'control-plane' ? 'role-cp' : 'role-worker'}">${esc(nodeRole)}</span>`
+        : '';
+    document.getElementById('header-node').innerHTML = `${esc(node.hostname)}${badge}`;
+}
+
+// One renderer tripping over an unexpected payload must not abort the
+// rest of the refresh; the section is reported like a failed fetch.
+function renderSection(name, failures, fn) {
+    try {
+        fn();
+    } catch (err) {
+        console.error(`rendering ${name} failed`, err);
+        failures.push({ name, status: 'render error' });
+    }
+}
+
+let refreshing = false;
+
+async function fetchOverview() {
+    // One refresh at a time: the timer and the Refresh button both land here.
+    if (refreshing) return;
+    refreshing = true;
+    if (timer) { clearInterval(timer); timer = null; }
+    const failures = [];
+    let gotData = false;
+    try {
         // Fetch fast sections in parallel
-        const fastResults = await Promise.all(FAST_SECTIONS.map(s => fetchSection(s)));
+        const fastResults = await Promise.all(FAST_SECTIONS.map(s => fetchSection(s, failures)));
         const data = {};
         FAST_SECTIONS.forEach((name, i) => { if (fastResults[i] != null) data[name] = fastResults[i]; });
 
-        // Render fast sections immediately
-        if (data.cluster_nodes) renderClusterBar(data.cluster_nodes, data.kubernetes?.ssh_info);
-        if (data.node && data.hardware) renderNodeBar(data.node, data.hardware);
-        if (data.warnings) renderWarnings(data.warnings);
-        if (data.hardware) renderHardware(data.hardware);
-        if (data.containers) renderContainers(data.containers);
+        // Snapshot open state right before replacing the markup, so toggles
+        // made while the requests were in flight are kept.
+        const openState = isFirstRender ? {} : saveOpenState();
+        const scrollY = window.scrollY;
 
-        // Show header
-        if (data.node) {
-            const role = data.kubernetes?.node_info?.labels?.['node-role.kubernetes.io/control-plane'] !== undefined ? 'control-plane' : 'worker';
-            document.getElementById('header-node').innerHTML = `${esc(data.node.hostname)} <span class="role-badge ${role === 'control-plane' ? 'role-cp' : 'role-worker'}">${role}</span>`;
-        }
+        // Render fast sections immediately
+        const render = (name, fn) => renderSection(name, failures, fn);
+        if (data.cluster_nodes) render('cluster_nodes', () => renderClusterBar(data.cluster_nodes, data.kubernetes?.ssh_info));
+        if (data.node) render('node', () => renderNodeBar(data.node, data.hardware));
+        if (data.warnings) render('warnings', () => renderWarnings(data.warnings));
+        if (data.hardware) render('hardware', () => renderHardware(data.hardware));
+        if (data.containers) render('containers', () => renderContainers(data.containers));
+
+        // Show header — the role comes from cluster_nodes here, kubernetes
+        // is a slow section and is not loaded yet.
+        const current = data.cluster_nodes?.find(n => n.current);
+        if (current?.role) nodeRole = current.role;
+        if (data.node) renderHeader(data.node);
 
         // Restore scroll + open state after fast render
         if (!isFirstRender) {
@@ -80,42 +132,65 @@ async function fetchOverview() {
         }
 
         // Fetch slow sections in parallel (background)
-        const slowResults = await Promise.all(SLOW_SECTIONS.map(s => fetchSection(s)));
+        const slowResults = await Promise.all(SLOW_SECTIONS.map(s => fetchSection(s, failures)));
         SLOW_SECTIONS.forEach((name, i) => { if (slowResults[i] != null) data[name] = slowResults[i]; });
 
-        // Save scroll again before slow render
+        // Save scroll and open state again before slow render
+        const openState2 = isFirstRender ? {} : saveOpenState();
         const scrollY2 = window.scrollY;
 
         // Render slow sections — also update SSH info + cluster bar once K8s data arrives
         if (data.kubernetes) {
-            renderKubernetes(data.kubernetes);
-            if (data.kubernetes.ssh_info) renderClusterBar(clusterNodes, data.kubernetes.ssh_info);
+            render('kubernetes', () => renderKubernetes(data.kubernetes));
+            if (data.kubernetes.ssh_info) render('cluster_nodes', () => renderClusterBar(clusterNodes, data.kubernetes.ssh_info));
         }
-        if (data.talos) renderTalos(data.talos);
-        if (data.storage) renderStorage(data.storage);
-        if (data.system) renderSystem(data.system);
-        if (data.network) renderNetwork(data.network);
-        if (data.processes) renderProcesses(data.processes);
+        if (data.talos) render('talos', () => renderTalos(data.talos));
+        if (data.storage) render('storage', () => renderStorage(data.storage));
+        if (data.system) render('system', () => renderSystem(data.system));
+        if (data.network) render('network', () => renderNetwork(data.network));
+        if (data.processes) render('processes', () => renderProcesses(data.processes));
 
-        // Update role badge now that K8s data is available
-        if (data.node && data.kubernetes) {
-            const role = data.kubernetes.node_info?.labels?.['node-role.kubernetes.io/control-plane'] !== undefined ? 'control-plane' : 'worker';
-            document.getElementById('header-node').innerHTML = `${esc(data.node.hostname)} <span class="role-badge ${role === 'control-plane' ? 'role-cp' : 'role-worker'}">${role}</span>`;
+        // Update role badge from the node labels once K8s data is available
+        if (data.node && data.kubernetes?.node_info?.labels) {
+            nodeRole = 'node-role.kubernetes.io/control-plane' in data.kubernetes.node_info.labels ? 'control-plane' : 'worker';
+            renderHeader(data.node);
         }
 
         lastData = data;
+        gotData = Object.keys(data).length > 0;
         if (!isFirstRender) {
-            restoreOpenState(openState);
+            restoreOpenState(openState2);
             window.scrollTo(0, scrollY2);
         }
-        isFirstRender = false;
+        if (gotData) isFirstRender = false;
 
-        document.getElementById('status').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
-        document.getElementById('error-bar')?.remove();
+        reportFailures(failures, gotData);
     } catch (err) {
         showError(err.message);
+    } finally {
+        refreshing = false;
     }
     resetCountdown();
+}
+
+// fetchSection swallows errors so one broken collector does not blank the
+// page; this surfaces them so stale data is never presented as fresh.
+function reportFailures(failures, gotData) {
+    if (gotData) {
+        document.getElementById('status').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+    }
+    if (!failures.length) {
+        document.getElementById('error-bar')?.remove();
+        return;
+    }
+    if (failures.some(f => f.status === 401)) {
+        showError('authentication required (HTTP 401). Reload the page to sign in; the browser UI needs basic auth (AUTH_PASSWORD), not a bearer token.');
+        return;
+    }
+    const list = failures.map(f => `${f.name} (${typeof f.status === 'number' ? 'HTTP ' + f.status : f.status})`).join(', ');
+    showError(gotData
+        ? `some sections could not be loaded: ${list}`
+        : `all sections failed, data shown is stale: ${list}`);
 }
 
 function showError(msg) {
@@ -137,6 +212,9 @@ function resetCountdown() {
         const el = document.getElementById('countdown');
         if (el) el.textContent = `${countdown}s`;
         if (countdown <= 0) {
+            // Stop ticking; fetchOverview restarts the countdown when done.
+            clearInterval(timer);
+            timer = null;
             fetchOverview();
         }
     }, 1000);
@@ -187,7 +265,16 @@ function renderClusterBar(nodes, ssh) {
     }
     document.getElementById('cluster-current').innerHTML = currentHtml;
     document.getElementById('cluster-count').textContent = `${readyCount}/${clusterNodes.length} nodes`;
-    renderClusterList('');
+    // Keep whatever the user typed in the search box across refreshes.
+    renderClusterList((document.getElementById('cluster-search')?.value || '').toLowerCase());
+}
+
+// Every node serves the dashboard on the same port and scheme (DaemonSet,
+// hostNetwork), so reuse this page's. IPv6 literals need brackets.
+function nodeUrl(ip, theme) {
+    const host = ip.includes(':') ? `[${ip}]` : ip;
+    const port = location.port ? `:${location.port}` : '';
+    return `${location.protocol}//${host}${port}/?theme=${encodeURIComponent(theme)}`;
 }
 
 function renderClusterList(query) {
@@ -199,7 +286,7 @@ function renderClusterList(query) {
     list.innerHTML = filtered.map(n => {
         const dot = n.ready ? '<span class="cn-dot cn-ready"></span>' : '<span class="cn-dot cn-notready"></span>';
         const role = n.role === 'control-plane' ? '<span class="cn-role cn-cp">CP</span>' : '<span class="cn-role cn-wk">W</span>';
-        const link = n.current ? '#' : `http://${n.ip}/?theme=${theme}`;
+        const link = n.current ? '#' : nodeUrl(n.ip, theme);
         const cls = n.current ? 'cluster-item current' : 'cluster-item';
         const sshCmd = `ssh -p ${sshInfo.port} debug@${n.ip}`;
         const sshBadge = sshInfo.enabled && n.ready
@@ -222,7 +309,7 @@ function gauge(label, percent, valueText) {
 function renderNodeBar(node, hardware) {
     const el = document.getElementById('node-bar');
     // CPU usage from load average vs cores
-    const cpuPercent = Math.round((node.load_1m / node.cpu_threads) * 100);
+    const cpuPercent = Math.round((node.load_1m / (node.cpu_threads || 1)) * 100);
     // RAM usage from hardware memory
     const mem = hardware?.memory;
     const ramPercent = mem ? Math.round(mem.used_percent) : 0;
@@ -265,8 +352,8 @@ function renderWarnings(warnings) {
 
     for (const w of warnings) {
         html += `<div class="warning-item">
-            <span class="warning-dot ${w.severity}"></span>
-            <span class="sev-${w.severity}">[${w.source}]</span>
+            <span class="warning-dot ${esc(w.severity)}"></span>
+            <span class="sev-${esc(w.severity)}">[${esc(w.source)}]</span>
             ${esc(w.message)}${w.device ? ` <span style="color:var(--text-dim)">(${esc(w.device)})</span>` : ''}
         </div>`;
     }
@@ -282,8 +369,9 @@ function renderHardware(hw) {
     const el = document.getElementById('hardware-section');
     let html = '<details data-id="hardware"><summary>Hardware</summary><div class="section-content">';
 
-    // CPU
-    html += subSection('hw-cpu', 'CPU', `
+    // CPU (null when its collector failed)
+    const UNAVAILABLE = '<div style="color:var(--text-dim);padding:8px 0">Not available (collector failed)</div>';
+    html += subSection('hw-cpu', 'CPU', !hw.cpu ? UNAVAILABLE : `
         <div class="kv-grid">
             <span class="kv-key">Model</span><span class="kv-val">${esc(hw.cpu.model)}</span>
             <span class="kv-key">Architecture</span><span class="kv-val">${esc(hw.cpu.architecture)}</span>
@@ -295,7 +383,7 @@ function renderHardware(hw) {
 
     // Memory
     const mem = hw.memory;
-    let memHtml = `
+    let memHtml = !mem ? UNAVAILABLE : `
         <div class="kv-grid">
             <span class="kv-key">Total</span><span class="kv-val">${mem.total_gb} GB</span>
             <span class="kv-key">Available</span><span class="kv-val">${mem.available_gb} GB</span>
@@ -304,7 +392,7 @@ function renderHardware(hw) {
             <span class="kv-key">ECC UE</span><span class="kv-val ${mem.ecc_uncorrectable_errors > 0 ? 'sev-critical' : ''}">${mem.ecc_uncorrectable_errors}</span>
         </div>
     `;
-    if (mem.dimms.length) {
+    if (mem?.dimms.length) {
         memHtml += table(['Locator', 'Size', 'Type', 'Speed', 'Manufacturer', 'Serial', 'Part'],
             mem.dimms.map(d => [
                 d.locator, d.size_mb ? `${d.size_mb} MB` : '-', d.type || '-',
@@ -417,12 +505,14 @@ function renderStorage(storage) {
         for (const s of storage.smart) {
             // health_passed is null when the drive reports no SMART at all.
             // That is not a pass and not a failure — say so rather than pick one.
+            // A drive in standby was deliberately not woken (smartctl -n standby).
             const statusClass = s.health_passed == null
                 ? 'sev-unknown'
                 : (s.health_passed ? 'sev-ok' : 'sev-critical');
             const statusText = s.health_passed == null
-                ? 'NOT REPORTED'
+                ? (s.standby ? 'STANDBY' : 'NOT REPORTED')
                 : (s.health_passed ? 'PASSED' : 'FAILED');
+            const count = v => v != null ? esc(v) : '-';
             smartHtml += `<div style="margin-top:8px;font-weight:500;color:var(--text-bright)">${esc(s.device)} — ${esc(s.model || 'Unknown')}</div>`;
             smartHtml += `<div class="kv-grid">
                 <span class="kv-key">Health</span><span class="kv-val ${statusClass}">${statusText}</span>
@@ -430,14 +520,19 @@ function renderStorage(storage) {
                 <span class="kv-key">Temperature</span><span class="kv-val">${s.temperature_celsius != null ? s.temperature_celsius + '°C' : '-'}</span>
                 <span class="kv-key">Power-On Hours</span><span class="kv-val">${s.power_on_hours != null ? s.power_on_hours.toLocaleString() + 'h' : '-'}</span>
                 <span class="kv-key">Wear Level</span><span class="kv-val">${s.wear_leveling_percent != null ? s.wear_leveling_percent + '%' : '-'}</span>
-                <span class="kv-key">Reallocated Sectors</span><span class="kv-val ${(s.reallocated_sectors || 0) > 0 ? 'sev-warning' : ''}">${s.reallocated_sectors != null ? s.reallocated_sectors : '-'}</span>
+                <span class="kv-key">Reallocated Sectors</span><span class="kv-val ${(s.reallocated_sectors || 0) > 0 ? 'sev-warning' : ''}">${count(s.reallocated_sectors)}</span>
+                <span class="kv-key">Pending Sectors</span><span class="kv-val ${(s.pending_sectors || 0) > 0 ? 'sev-warning' : ''}">${count(s.pending_sectors)}</span>
+                <span class="kv-key">Offline Uncorrectable</span><span class="kv-val ${(s.offline_uncorrectable || 0) > 0 ? 'sev-warning' : ''}">${count(s.offline_uncorrectable)}</span>
+                ${s.error ? `<span class="kv-key">Error</span><span class="kv-val sev-warning">${esc(s.error)}</span>` : ''}
+                ${(s.smart_issues || []).length ? `<span class="kv-key">Issues</span><span class="kv-val sev-critical">${s.smart_issues.map(esc).join('<br>')}</span>` : ''}
             </div>`;
-            if (s.attributes.length) {
+            const attrs = s.attributes || [];
+            if (attrs.length) {
                 const devId = s.device.replace(/\//g, '-');
-                smartHtml += `<details data-id="smart-attr-${devId}" class="sub-section" style="margin-top:4px"><summary>SMART Attributes (${s.attributes.length})</summary><div class="section-content">`;
+                smartHtml += `<details data-id="smart-attr-${devId}" class="sub-section" style="margin-top:4px"><summary>SMART Attributes (${attrs.length})</summary><div class="section-content">`;
                 smartHtml += table(
                     ['ID', 'Name', 'Value', 'Worst', 'Thresh', 'Raw'],
-                    s.attributes.map(a => [a.id, a.name, a.value, a.worst, a.threshold, a.raw_value])
+                    attrs.map(a => [a.id, a.name, a.value, a.worst, a.threshold, a.raw_value])
                 );
                 smartHtml += '</div></details>';
             }
@@ -451,7 +546,7 @@ function renderStorage(storage) {
             ['Filesystem', 'Mount', 'Type', 'Size', 'Used', 'Avail', 'Used%'],
             storage.usage.map(u => [
                 u.filesystem, u.mount, u.fs_type, u.size, u.used, u.available,
-                raw(`<span class="sev-${u.severity}">${u.used_percent}%</span>`)
+                raw(`<span class="sev-${esc(u.severity)}">${esc(u.used_percent)}%</span>`)
             ])
         ));
     }
@@ -469,7 +564,7 @@ function renderSystem(sys) {
     if (efi.entries.length) {
         let efiHtml = `<div class="kv-grid">
             <span class="kv-key">Boot Current</span><span class="kv-val">${esc(efi.boot_current || '-')}</span>
-            <span class="kv-key">Boot Order</span><span class="kv-val">${efi.boot_order.join(', ') || '-'}</span>
+            <span class="kv-key">Boot Order</span><span class="kv-val">${efi.boot_order.map(esc).join(', ') || '-'}</span>
             <span class="kv-key">Timeout</span><span class="kv-val">${esc(efi.timeout || '-')}</span>
         </div>`;
         efiHtml += table(
@@ -496,9 +591,9 @@ function renderNetwork(net) {
     let html = '<details data-id="network"><summary>Network</summary><div class="section-content">';
 
     const conn = net.connectivity;
-    let connHtml = `<div class="kv-grid">
+    let connHtml = !conn ? '<div style="color:var(--text-dim);padding:8px 0">Not available (collector failed)</div>' : `<div class="kv-grid">
         <span class="kv-key">Default Gateway</span><span class="kv-val">${esc(conn.default_gateway || 'none')}</span>
-        <span class="kv-key">DNS Servers</span><span class="kv-val">${conn.dns_servers.join(', ') || '-'}</span>
+        <span class="kv-key">DNS Servers</span><span class="kv-val">${(conn.dns_servers || []).map(esc).join(', ') || '-'}${(conn.dns_failed_servers || []).length ? ` <span class="sev-warning">(not resolving: ${conn.dns_failed_servers.map(esc).join(', ')})</span>` : ''}</span>
         <span class="kv-key">DNS Resolution</span><span class="kv-val ${conn.dns_ok ? 'sev-ok' : 'sev-critical'}">${conn.dns_ok ? 'OK' : 'FAILED'}${conn.dns_result ? ' (' + esc(conn.dns_result) + ')' : ''}</span>
         <span class="kv-key">Internet</span><span class="kv-val ${conn.internet_ok ? 'sev-ok' : 'sev-critical'}">${conn.internet_ok ? 'Reachable' : 'Unreachable'}</span>
         <span class="kv-key">K8s API</span><span class="kv-val ${conn.kubernetes_api_ok ? 'sev-ok' : 'sev-critical'}">${conn.kubernetes_api_ok ? 'Reachable' : 'Unreachable'}</span>
@@ -664,6 +759,7 @@ function renderKubernetes(k8s) {
             compHtml += `<div class="kv-grid">
                 <span class="kv-key">DB Size</span><span class="kv-val">${e.db_size_mb} MB</span>
                 <span class="kv-key">DB In Use</span><span class="kv-val">${e.db_size_in_use_mb} MB</span>
+                <span class="kv-key">Quota</span><span class="kv-val">${severityBadge(e.defrag_severity || 'ok', `${e.quota_used_percent}% of ${e.db_size_quota_mb} MB`)}${e.quota_assumed ? ' <span style="color:var(--text-dim)">(etcd default, assumed)</span>' : ''}</span>
                 <span class="kv-key">Leader</span><span class="kv-val">${e.is_leader ? severityBadge('ok', 'This node') : esc(e.leader_id)}</span>
                 <span class="kv-key">Member ID</span><span class="kv-val">${esc(e.member_id)}</span>
                 <span class="kv-key">Raft Index</span><span class="kv-val">${e.raft_index}</span>
@@ -701,34 +797,38 @@ function renderTalos(talos) {
         ${talos.version.schematic_id ? `<span class="kv-key">Schematic</span><span class="kv-val">${esc(talos.version.schematic_id)}</span>` : ''}
     </div>`;
 
-    // Machine config
-    const mc = talos.machine_config;
-    if (mc.config_available) {
-        versionHtml += `<div class="kv-grid" style="margin-top:8px">
-            <span class="kv-key">Type</span><span class="kv-val">${esc(mc.machine_type)}</span>
-            <span class="kv-key">Install Disk</span><span class="kv-val">${esc(mc.install_disk)}</span>
-            <span class="kv-key">Install Image</span><span class="kv-val" style="word-break:break-all">${esc(mc.install_image)}</span>
-            <span class="kv-key">Cluster</span><span class="kv-val">${esc(mc.cluster_name)}</span>
-            <span class="kv-key">Endpoint</span><span class="kv-val">${esc(mc.cluster_endpoint)}</span>
-        </div>`;
-
-        if (mc.extensions.length) {
-            versionHtml += '<div style="margin-top:8px;font-weight:500;color:var(--text-bright)">Extensions</div>';
-            versionHtml += '<div style="padding:4px 0">' + mc.extensions.map(e => `<span style="background:var(--bg);padding:2px 6px;border-radius:3px;margin:2px;display:inline-block;font-size:11px">${esc(e)}</span>`).join('') + '</div>';
-        }
-
-        if (mc.network_interfaces.length) {
-            versionHtml += '<div style="margin-top:8px;font-weight:500;color:var(--text-bright)">Network Interfaces</div>';
-            versionHtml += table(['Name', 'Addresses', 'DHCP', 'Routes'],
-                mc.network_interfaces.map(i => [
-                    i.name, i.addresses.join(', ') || '-',
-                    i.dhcp ? 'Yes' : 'No',
-                    i.routes.length ? i.routes.join(', ') : '-'
-                ])
-            );
-        }
-    } else {
+    // Machine config. install_disk and network_interfaces come from sysfs
+    // and `ip`, so they are shown even when the config itself is not readable.
+    const mc = talos.machine_config || {};
+    const ifaces = mc.network_interfaces || [];
+    const exts = mc.extensions || [];
+    if (!mc.config_available) {
         versionHtml += `<div style="color:var(--text-dim);padding:8px 0">${esc(mc.error || 'Config not available')}</div>`;
+    }
+    const kv = (k, v, extra = '') => v ? `<span class="kv-key">${k}</span><span class="kv-val"${extra}>${esc(v)}</span>` : '';
+    const mcRows = [
+        mc.config_available ? kv('Type', mc.machine_type || 'unknown') : kv('Type', mc.machine_type),
+        kv('Install Disk', mc.install_disk),
+        kv('Install Image', mc.install_image, ' style="word-break:break-all"'),
+        kv('Cluster', mc.cluster_name),
+        kv('Endpoint', mc.cluster_endpoint),
+    ].join('');
+    if (mcRows) versionHtml += `<div class="kv-grid" style="margin-top:8px">${mcRows}</div>`;
+
+    if (exts.length) {
+        versionHtml += '<div style="margin-top:8px;font-weight:500;color:var(--text-bright)">Extensions</div>';
+        versionHtml += '<div style="padding:4px 0">' + exts.map(e => `<span style="background:var(--bg);padding:2px 6px;border-radius:3px;margin:2px;display:inline-block;font-size:11px">${esc(e)}</span>`).join('') + '</div>';
+    }
+
+    if (ifaces.length) {
+        versionHtml += '<div style="margin-top:8px;font-weight:500;color:var(--text-bright)">Network Interfaces</div>';
+        versionHtml += table(['Name', 'Addresses', 'DHCP', 'Routes'],
+            ifaces.map(i => [
+                i.name, (i.addresses || []).join(', ') || '-',
+                i.dhcp ? 'Yes' : 'No',
+                (i.routes || []).length ? i.routes.join(', ') : '-'
+            ])
+        );
     }
     html += subSection('talos-config', 'Machine Config', versionHtml);
 
@@ -764,16 +864,62 @@ document.addEventListener('click', e => {
         return;
     }
 
+    const sortBtn = e.target.closest('[data-proc-sort]');
+    if (sortBtn) {
+        processSort = sortBtn.dataset.procSort === 'cpu' ? 'cpu' : 'mem';
+        if (lastProcs) renderProcesses(lastProcs);
+        return;
+    }
+
     const copy = e.target.closest('[data-copy]');
     if (copy) {
         e.preventDefault();
-        navigator.clipboard.writeText(copy.dataset.copy);
-        copy.textContent = 'Copied!';
-        setTimeout(() => { copy.textContent = 'SSH'; }, 1000);
+        copyText(copy.dataset.copy).then(ok => {
+            copy.textContent = ok ? 'Copied!' : 'Copy failed';
+            setTimeout(() => { copy.textContent = 'SSH'; }, 1000);
+        });
     }
 });
 
+// navigator.clipboard only exists in secure contexts (HTTPS or localhost),
+// and the dashboard is normally served over plain http://<node-ip>. Fall
+// back to the legacy execCommand path there.
+async function copyText(text) {
+    if (window.isSecureContext && navigator.clipboard) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch {
+            // fall through to the legacy path
+        }
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try {
+        ok = document.execCommand('copy');
+    } catch {
+        ok = false;
+    }
+    ta.remove();
+    return ok;
+}
+
 // ── Containers ──
+// The CRI does not say here whether an exited container failed or completed
+// (a finished Job, an init container), so EXITED is neutral, not critical.
+// Uptime is '' for any container that is not running.
+function containerStateBadge(state) {
+    if (state === 'CONTAINER_RUNNING') return severityBadge('ok', 'Running');
+    if (state === 'CONTAINER_EXITED') return severityBadge('unknown', 'Exited');
+    if (state === 'CONTAINER_CREATED') return severityBadge('info', 'Created');
+    return severityBadge('warning', state || 'unknown');
+}
+
 function renderContainers(ct) {
     const el = document.getElementById('containers-section');
     if (!ct) { el.innerHTML = ''; return; }
@@ -785,7 +931,7 @@ function renderContainers(ct) {
             ['Name', 'State', 'Memory', 'Image', 'Uptime', 'Logs'],
             ct.system_containers.map(c => [
                 c.name,
-                raw(c.state === 'CONTAINER_RUNNING' ? severityBadge('ok', 'Running') : severityBadge('critical', c.state)),
+                raw(containerStateBadge(c.state)),
                 c.stats.memory_human || '-',
                 raw(`<span class="image-cell">${esc((c.image || '').split('/').pop())}</span>`),
                 c.uptime || '-',
@@ -802,7 +948,7 @@ function renderContainers(ct) {
                 c.namespace,
                 c.pod_name,
                 c.container_name,
-                raw(c.state === 'CONTAINER_RUNNING' ? severityBadge('ok', 'Running') : severityBadge('critical', c.state)),
+                raw(containerStateBadge(c.state)),
                 c.stats.memory_human || '-',
                 c.uptime || '-',
                 raw(logButton(
@@ -818,17 +964,29 @@ function renderContainers(ct) {
 }
 
 // ── Processes ──
+// /api/processes returns the top 200 by memory plus up to 50 more top CPU
+// consumers, ordered by memory. Sorting is client-side and remembered.
+let processSort = 'mem';
+let lastProcs = null;
+
 function renderProcesses(procs) {
     const el = document.getElementById('processes-section');
     if (!procs) { el.innerHTML = ''; return; }
-    let html = '<details data-id="processes"><summary>Processes (' + procs.total_count + ')</summary><div class="section-content">';
+    lastProcs = procs;
+    const key = processSort === 'cpu' ? 'cpu_percent' : 'mem_percent';
+    const rows = [...(procs.processes || [])].sort((a, b) => (b[key] || 0) - (a[key] || 0));
+    let html = '<details data-id="processes"><summary>Processes (' + esc(procs.total_count) + ')</summary><div class="section-content">';
+    html += `<div class="proc-sort" style="padding:4px 0">Sort by:
+        <button class="log-btn" data-proc-sort="cpu"${processSort === 'cpu' ? ' aria-pressed="true" style="font-weight:700"' : ''}>CPU%</button>
+        <button class="log-btn" data-proc-sort="mem"${processSort === 'mem' ? ' aria-pressed="true" style="font-weight:700"' : ''}>MEM%</button>
+    </div>`;
 
     html += table(
         ['PID', 'PPID', 'User', 'CPU%', 'MEM%', 'RSS', 'State', 'Command'],
-        procs.processes.map(p => [
+        rows.map(p => [
             p.pid, p.ppid, p.user,
-            p.cpu_percent.toFixed(1),
-            p.mem_percent.toFixed(1),
+            (p.cpu_percent || 0).toFixed(1),
+            (p.mem_percent || 0).toFixed(1),
             humanBytes(p.rss_kb * 1024),
             p.state,
             raw(`<span class="cmd-cell">${esc(p.command)}</span>`)
@@ -836,11 +994,30 @@ function renderProcesses(procs) {
     );
 
     html += '</div></details>';
+    // Keep the section open across the re-render a sort click causes.
+    const wasOpen = el.querySelector('details[data-id="processes"]')?.open;
     el.innerHTML = html;
+    if (wasOpen) el.querySelector('details[data-id="processes"]').open = true;
 }
 
 // ── WebSocket Log Viewer ──
 let logSocket = null;
+
+// The server sends one frame per log line. Lines are buffered and appended
+// as one text node per flush, and the oldest text is dropped past this
+// size, so a chatty container cannot grow the <pre> without bound.
+const LOG_MAX_CHARS = 2 * 1024 * 1024;
+const LOG_FLUSH_MS = 100;
+
+// Detach handlers first: the old socket's close event fires later, and
+// would otherwise write into the viewer of the next container.
+function closeLogSocket() {
+    if (!logSocket) return;
+    const ws = logSocket;
+    logSocket = null;
+    ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+    ws.close();
+}
 
 function openLogViewer(containerId, containerName) {
     const modal = document.getElementById('log-modal');
@@ -851,35 +1028,63 @@ function openLogViewer(containerId, containerName) {
     title.textContent = 'Logs: ' + containerName;
     content.textContent = 'Connecting...\n';
 
-    if (logSocket) { logSocket.close(); logSocket = null; }
+    closeLogSocket();
 
     const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    logSocket = new WebSocket(wsProtocol + '//' + location.host + '/api/containers/' + containerId + '/logs');
+    const ws = new WebSocket(wsProtocol + '//' + location.host + '/api/containers/' + containerId + '/logs');
+    logSocket = ws;
 
-    logSocket.onopen = () => {
-        content.textContent = '';
-    };
+    let pending = [];
+    let flushTimer = null;
+    let size = 0;
 
-    logSocket.onmessage = (event) => {
-        content.textContent += event.data;
-        // Auto-scroll if near bottom
-        if (content.scrollHeight - content.scrollTop - content.clientHeight < 100) {
-            content.scrollTop = content.scrollHeight;
+    function flush() {
+        flushTimer = null;
+        if (ws !== logSocket || !pending.length) return;
+        // Measure before appending: afterwards the new text itself counts
+        // as distance from the bottom.
+        const atBottom = content.scrollHeight - content.scrollTop - content.clientHeight < 100;
+        const text = pending.join('');
+        pending = [];
+        content.append(text);
+        size += text.length;
+        while (size > LOG_MAX_CHARS && content.firstChild && content.firstChild !== content.lastChild) {
+            size -= content.firstChild.textContent.length;
+            content.firstChild.remove();
         }
+        if (atBottom) content.scrollTop = content.scrollHeight;
+    }
+
+    function appendLine(text) {
+        pending.push(text);
+        if (!flushTimer) flushTimer = setTimeout(flush, LOG_FLUSH_MS);
+    }
+
+    ws.onopen = () => {
+        if (ws !== logSocket) return;
+        content.textContent = '';
+        size = 0;
     };
 
-    logSocket.onerror = () => {
-        content.textContent += '\n[WebSocket error]\n';
+    ws.onmessage = (event) => {
+        if (ws !== logSocket) return;
+        appendLine(event.data);
     };
 
-    logSocket.onclose = () => {
-        content.textContent += '\n[Connection closed]\n';
+    ws.onerror = () => {
+        if (ws !== logSocket) return;
+        appendLine('\n[WebSocket error]\n');
+    };
+
+    ws.onclose = () => {
+        if (ws !== logSocket) return;
+        appendLine('\n[Connection closed]\n');
     };
 }
 
 function closeLogViewer() {
     document.getElementById('log-modal').classList.add('hidden');
-    if (logSocket) { logSocket.close(); logSocket = null; }
+    closeLogSocket();
 }
 
 // ── Init ──

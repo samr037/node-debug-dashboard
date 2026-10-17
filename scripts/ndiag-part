@@ -84,14 +84,25 @@ cmd_fs() {
     fi
     header "Filesystem Details"
     echo -e "${C_DIM}  NAME         SIZE  TYPE   FSTYPE    LABEL                MOUNT${C_RESET}"
-    lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null | tail -n +2 | \
-    awk '{
+    # -P (KEY="value" pairs): empty FSTYPE/LABEL fields would otherwise vanish
+    # when awk splits on whitespace and shift the following columns
+    lsblk -P -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null | \
+    awk '
+    function kv(k,   v) {
+        if (!match($0, "(^| )" k "=\"[^\"]*\"")) return ""
+        v = substr($0, RSTART, RLENGTH)
+        sub(/^ ?[A-Z]+="/, "", v); sub(/"$/, "", v)
+        return v
+    }
+    {
+        name=kv("NAME"); type=kv("TYPE")
         # Color based on type
-        if ($3 == "disk") color="\033[1m"
-        else if ($3 == "part") color="\033[0m"
-        else if ($3 == "lvm") color="\033[33m"
+        if (type == "disk") color="\033[1m"
+        else if (type == "part") color="\033[0m"
+        else if (type == "lvm") color="\033[33m"
         else color="\033[2m"
-        printf "  %s%-12s %5s %-6s %-9s %-20s %s\033[0m\n", color, $1, $2, $3, $4, $5, $6
+        if (type != "disk") name="  " name
+        printf "  %s%-12s %5s %-6s %-9s %-20s %s\033[0m\n", color, name, kv("SIZE"), type, kv("FSTYPE"), kv("LABEL"), kv("MOUNTPOINT")
     }'
 
     echo ""
@@ -129,11 +140,15 @@ cmd_table() {
         table_type=$(blkid -o value -s PTTYPE "$dev" 2>/dev/null) || table_type="unknown"
         echo -e "  ${C_DIM}Table type: ${table_type}${C_RESET}"
 
+        # No partitions (whole-disk Ceph OSD / LVM PV, blank disk): grep finds
+        # nothing and must not abort the loop under errexit
         if [ "$table_type" = "gpt" ]; then
             sgdisk -p "$dev" 2>/dev/null | grep -E '^\s+[0-9]' | sed 's/^/    /' || \
-                fdisk -l "$dev" 2>/dev/null | grep "^/dev" | sed 's/^/    /'
+                fdisk -l "$dev" 2>/dev/null | grep "^/dev" | sed 's/^/    /' || \
+                echo -e "    ${C_DIM}(no partitions)${C_RESET}"
         else
-            fdisk -l "$dev" 2>/dev/null | grep "^/dev" | sed 's/^/    /'
+            fdisk -l "$dev" 2>/dev/null | grep "^/dev" | sed 's/^/    /' || \
+                echo -e "    ${C_DIM}(no partitions)${C_RESET}"
         fi
         echo ""
     done

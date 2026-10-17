@@ -213,7 +213,7 @@ cmd_sa() {
     # Test the token
     echo ""
     local test
-    test=$(k8s_api "/api/v1/nodes/${NODE_NAME}" 2>/dev/null)
+    test=$(k8s_api "/api/v1/nodes/${NODE_NAME}" 2>/dev/null) || test='{"reason":"API unreachable"}'
     if echo "$test" | jq -e '.metadata.name' &>/dev/null; then
         ok "Token is valid — can read node info"
     else

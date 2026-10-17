@@ -1,10 +1,11 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.auth import AuthMiddleware
+from app.auth import AuthMiddleware, auth_configured
 from app.httpclient import close_clients
 from app.routers import (
     containers,
@@ -22,8 +23,19 @@ from app.routers import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    if not auth_configured():
+        # Open stays the default so upgrades do not lock anyone out, but it
+        # must not be silent: this serves pod logs and the host process
+        # table to anything that can route to the node.
+        logger.warning(
+            "Dashboard authentication is DISABLED: set AUTH_TOKEN or "
+            "AUTH_PASSWORD to require credentials."
+        )
     yield
     await close_clients()
 

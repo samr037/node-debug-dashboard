@@ -310,8 +310,32 @@ The container ships with 200+ tools organized by category:
 |---|---|---|
 | `SSH_ENABLED` | `false` | Enable/disable SSH server |
 | `SSH_PORT` | `2022` | SSH listen port |
-| `SSH_PASSWORD_AUTH` | `false` | Allow password login |
+| `SSH_PASSWORD_AUTH` | `false` | Allow password login (only with `SSH_PASSWORD` set) |
+| `SSH_PASSWORD` | — | Password for the `debug` user; both accounts ship locked without it |
 | `SSH_AUTHORIZED_KEYS` | — | Newline-separated public keys |
+| `SSH_HOST_KEY_DIR` | `/var/lib/node-debug-dashboard/ssh` | Host keys are generated into and reused from this directory when it exists |
+
+`SSH_ENABLED` and `SSH_PASSWORD_AUTH` accept `1`, `true`, `yes` or `on`, in
+any case (surrounding whitespace ignored); anything else is false.
+
+### Stable host keys
+
+The image ships no SSH host keys. Without `SSH_HOST_KEY_DIR` present, each
+pod generates fresh keys on start: safe, but every restart or upgrade shows
+up as "REMOTE HOST IDENTIFICATION HAS CHANGED" in `known_hosts`. Mount a
+per-node hostPath there to keep them:
+
+```yaml
+volumeMounts:
+  - name: ssh-host-keys
+    mountPath: /var/lib/node-debug-dashboard/ssh
+volumes:
+  - name: ssh-host-keys
+    hostPath: { path: /var/lib/node-debug-dashboard/ssh, type: DirectoryOrCreate }
+```
+
+The Helm chart does this when `ssh.enabled=true` (`ssh.persistHostKeys`,
+on by default; `ssh.hostKeyPath` sets the path).
 
 ### Key-based Auth via Kubernetes Secret
 

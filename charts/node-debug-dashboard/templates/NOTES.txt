@@ -4,14 +4,51 @@ Each node now serves the dashboard on host port {{ .Values.httpPort }}:
 
   Web UI:    http://<node-ip>:{{ .Values.httpPort }}/
   API docs:  http://<node-ip>:{{ .Values.httpPort }}/docs
+{{- $token := include "node-debug-dashboard.str" .Values.auth.token }}
+{{- $password := include "node-debug-dashboard.str" .Values.auth.password }}
+{{- $generated := include "node-debug-dashboard.generatedPassword" . }}
+{{- if .Values.auth.existingSecret }}
+
+Authentication: on, from Secret {{ .Values.auth.existingSecret }}.
+{{- else if $generated }}
+
+Authentication: on, HTTP Basic as {{ .Values.auth.username }} with a generated
+password (kept across upgrades). Read it with:
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "node-debug-dashboard.secretName" . }} \
+    -o jsonpath='{.data.auth-password}' | base64 -d; echo
+{{- else if or $token $password }}
+
+Authentication: on ({{ if $token }}bearer token{{ end }}{{ if and $token $password }} + {{ end }}{{ if $password }}HTTP Basic as {{ .Values.auth.username }}{{ end }}).
+{{- if and $token (not $password) }}
+Token-only auth is for scripts: a browser cannot send a bearer token, so the
+web UI needs auth.password (HTTP Basic) as well.
+{{- end }}
+{{- else }}
+
+WARNING: authentication is OFF{{ if .Values.auth.disabled }} (auth.disabled=true){{ end }}. Anything that can route
+to a node can read it through the dashboard. Set auth.existingSecret (or
+auth.token / auth.password).
+{{- end }}
+{{- if and .Values.networkPolicy.enabled .Values.hostNetwork }}
+
+WARNING: networkPolicy.enabled has no effect with hostNetwork=true; CNIs do
+not enforce NetworkPolicy on host-network pods. Use a host firewall (Talos
+NetworkRuleConfig, Cilium host policies) or an upstream ACL instead.
+{{- end }}
 
 {{- if .Values.ssh.enabled }}
 
 SSH is enabled on port {{ .Values.ssh.port }}.
 {{- if .Values.ssh.passwordAuth }}
-Password auth is on. Default credentials (debug:debug, root:root) are baked
-into the image; change them or restrict network access before exposing this
-beyond a private cluster.
+{{- if or .Values.ssh.existingSecret (include "node-debug-dashboard.str" .Values.ssh.password) }}
+Password auth is on for the "debug" user (root stays locked). Restrict
+network access before exposing this beyond a private cluster.
+{{- else }}
+WARNING: ssh.passwordAuth=true but no ssh.password / ssh.existingSecret is
+set. The image ships every account locked, so the entrypoint keeps password
+auth OFF; only ssh.authorizedKeys can log in.
+{{- end }}
 {{- else }}
 Password auth is off; key-based only.
 {{- end }}

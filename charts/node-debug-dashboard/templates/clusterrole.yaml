@@ -2,10 +2,13 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "node-debug-dashboard.fullname" . }}
+  name: {{ include "node-debug-dashboard.clusterName" . }}
   labels:
     {{- include "node-debug-dashboard.labels" . | nindent 4 }}
 rules:
+  # Only what the app and the kdiag-* scripts actually read. Deliberately no
+  # nodes/proxy: the kubelet authorizes WebSocket exec/attach as a GET on it,
+  # so that "read-only" grant would let this token exec into any pod.
   - apiGroups: [""]
     resources:
       - nodes
@@ -13,12 +16,12 @@ rules:
       - services
       - endpoints
       - events
-      - namespaces
     verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
+  # kdiag-services probes metrics-server; without this it always gets a 403
+  # and reports metrics-server as not available.
+  - apiGroups: ["metrics.k8s.io"]
     resources:
-      - nodes/proxy
-      - nodes/metrics
-      - nodes/stats
-    verbs: ["get"]
+      - nodes
+      - pods
+    verbs: ["get", "list"]
 {{- end -}}

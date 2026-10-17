@@ -19,10 +19,10 @@ cmd_list() {
     fi
     header "Pods on ${NODE_NAME}"
     local pods_json
-    pods_json=$(_get_pods)
+    pods_json=$(_get_pods) || return 0
 
     echo -e "  ${C_DIM}NAMESPACE            NAME                                      STATUS       RESTARTS  AGE${C_RESET}"
-    echo "$pods_json" | jq -r '.items[] |
+    echo "$pods_json" | jq -r '.items[]? |
         .metadata.namespace as $ns |
         .metadata.name as $name |
         .status.phase as $phase |
@@ -57,12 +57,12 @@ cmd_sick() {
     fi
     header "Unhealthy Pods on ${NODE_NAME}"
     local pods_json
-    pods_json=$(_get_pods)
+    pods_json=$(_get_pods) || return 0
     local found=0
 
     # CrashLoopBackOff
     local crashes
-    crashes=$(echo "$pods_json" | jq -r '.items[] |
+    crashes=$(echo "$pods_json" | jq -r '.items[]? |
         .metadata.namespace as $ns | .metadata.name as $name |
         .status.containerStatuses[]? |
         select(.state.waiting.reason == "CrashLoopBackOff") |
@@ -79,7 +79,7 @@ cmd_sick() {
 
     # OOMKilled
     local ooms
-    ooms=$(echo "$pods_json" | jq -r '.items[] |
+    ooms=$(echo "$pods_json" | jq -r '.items[]? |
         .metadata.namespace as $ns | .metadata.name as $name |
         .status.containerStatuses[]? |
         select(.lastState.terminated.reason == "OOMKilled") |
@@ -96,7 +96,7 @@ cmd_sick() {
 
     # Pending pods
     local pending
-    pending=$(echo "$pods_json" | jq -r '.items[] | select(.status.phase == "Pending") |
+    pending=$(echo "$pods_json" | jq -r '.items[]? | select(.status.phase == "Pending") |
         .metadata.namespace as $ns |
         "\($ns)\t\(.metadata.name)\t\(.status.conditions[]? | select(.type=="PodScheduled") | .message // "unknown")"
     ' 2>/dev/null)
@@ -111,7 +111,7 @@ cmd_sick() {
 
     # High restart pods (>10)
     local restarters
-    restarters=$(echo "$pods_json" | jq -r '.items[] |
+    restarters=$(echo "$pods_json" | jq -r '.items[]? |
         .metadata.namespace as $ns | .metadata.name as $name |
         ([.status.containerStatuses[]?.restartCount // 0] | add // 0) as $r |
         select($r > 10) |
@@ -128,7 +128,7 @@ cmd_sick() {
 
     # Init containers stuck
     local init_stuck
-    init_stuck=$(echo "$pods_json" | jq -r '.items[] |
+    init_stuck=$(echo "$pods_json" | jq -r '.items[]? |
         .metadata.namespace as $ns | .metadata.name as $name |
         .status.initContainerStatuses[]? |
         select(.state.waiting != null) |
@@ -143,7 +143,10 @@ cmd_sick() {
         found=1
     fi
 
-    [ "$found" = "0" ] && ok "All pods healthy!"
+    # Not `[ ] && ok`: that returned 1 when a pod was sick, and set -e stopped `all`
+    if [ "$found" = "0" ]; then
+        ok "All pods healthy!"
+    fi
 }
 
 cmd_resources() {
@@ -154,15 +157,15 @@ cmd_resources() {
     fi
     header "Pod Resource Usage — ${NODE_NAME}"
     local pods_json
-    pods_json=$(_get_pods)
+    pods_json=$(_get_pods) || return 0
 
     echo -e "  ${C_DIM}NAMESPACE            POD                                  CPU REQ    MEM REQ      GPU${C_RESET}"
-    echo "$pods_json" | jq -r '.items[] | select(.status.phase == "Running") |
+    echo "$pods_json" | jq -r "${JQ_QTY}"'.items[]? | select(.status.phase == "Running") |
         .metadata.namespace as $ns |
         .metadata.name as $name |
-        ([.spec.containers[].resources.requests.cpu // "0" | if endswith("m") then .[:-1] else (tonumber * 1000 | tostring) end | tonumber] | add) as $cpu |
-        ([.spec.containers[].resources.requests.memory // "0" | if endswith("Mi") then (.[:-2] | tonumber) elif endswith("Gi") then (.[:-2] | tonumber * 1024) elif endswith("Ki") then (.[:-2] | tonumber / 1024 | floor) else 0 end] | add) as $mem |
-        ([.spec.containers[].resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add) as $gpu |
+        ([.spec.containers[]?.resources.requests.cpu // "0" | qty * 1000] | add // 0 | round) as $cpu |
+        ([.spec.containers[]?.resources.requests.memory // "0" | qty] | (add // 0) / 1048576 | floor) as $mem |
+        ([.spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | qty] | add // 0 | round) as $gpu |
         "\($ns)\t\($name)\t\($cpu)\t\($mem)\t\($gpu)"
     ' 2>/dev/null | sort -t$'\t' -k4 -rn | \
     while IFS=$'\t' read -r ns name cpu mem gpu; do
@@ -174,9 +177,10 @@ cmd_resources() {
     # Totals
     echo ""
     local total_cpu total_mem total_gpu
-    total_cpu=$(echo "$pods_json" | jq '[.items[]? | select(.status.phase == "Running") | .spec.containers[]?.resources.requests.cpu // "0" | if endswith("m") then (.[:-1] | tonumber) else (tonumber * 1000) end] | add // 0' 2>/dev/null)
-    total_mem=$(echo "$pods_json" | jq '[.items[]? | select(.status.phase == "Running") | .spec.containers[]?.resources.requests.memory // "0" | if endswith("Mi") then (.[:-2] | tonumber) elif endswith("Gi") then (.[:-2] | tonumber * 1024) else 0 end] | add // 0' 2>/dev/null)
-    total_gpu=$(echo "$pods_json" | jq '[.items[]? | select(.status.phase == "Running") | .spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add // 0' 2>/dev/null)
+    total_cpu=$(echo "$pods_json" | jq "${JQ_QTY}"'[.items[]? | select(.status.phase == "Running") | .spec.containers[]?.resources.requests.cpu // "0" | qty * 1000] | add // 0 | round' 2>/dev/null) || true
+    # Same qty parsing as the rows, so the totals are their sum (Ki, M, G, "0.5" CPU...)
+    total_mem=$(echo "$pods_json" | jq "${JQ_QTY}"'[.items[]? | select(.status.phase == "Running") | .spec.containers[]?.resources.requests.memory // "0" | qty] | add // 0 | . / 1048576 | floor' 2>/dev/null) || true
+    total_gpu=$(echo "$pods_json" | jq "${JQ_QTY}"'[.items[]? | select(.status.phase == "Running") | .spec.containers[]?.resources.requests["nvidia.com/gpu"] // "0" | qty] | add // 0 | round' 2>/dev/null) || true
     echo -e "  ${C_BOLD}Totals: ${total_cpu}m CPU, ${total_mem} Mi memory, ${total_gpu} GPU${C_RESET}"
 }
 
@@ -188,18 +192,18 @@ cmd_images() {
     fi
     header "Container Images on ${NODE_NAME}"
     local pods_json
-    pods_json=$(_get_pods)
+    pods_json=$(_get_pods) || return 0
 
     echo -e "  ${C_DIM}IMAGE                                                              COUNT${C_RESET}"
-    echo "$pods_json" | jq -r '[.items[].spec.containers[].image] | group_by(.) | map({image: .[0], count: length}) | sort_by(-.count) | .[] | "\(.image)\t\(.count)"' 2>/dev/null | \
+    echo "$pods_json" | jq -r '[.items[]?.spec.containers[]?.image] | group_by(.) | map({image: .[0], count: length}) | sort_by(-.count) | .[] | "\(.image)\t\(.count)"' 2>/dev/null | \
     while IFS=$'\t' read -r image count; do
         printf "  %-65s %3s\n" "${image:0:65}" "$count"
     done
 
     echo ""
     local unique total
-    unique=$(echo "$pods_json" | jq '[.items[].spec.containers[].image] | unique | length' 2>/dev/null)
-    total=$(echo "$pods_json" | jq '[.items[].spec.containers[].image] | length' 2>/dev/null)
+    unique=$(echo "$pods_json" | jq '[.items[]?.spec.containers[]?.image] | unique | length' 2>/dev/null)
+    total=$(echo "$pods_json" | jq '[.items[]?.spec.containers[]?.image] | length' 2>/dev/null)
     dim "${unique} unique images, ${total} total containers"
 }
 

@@ -6,9 +6,11 @@ docs
 tests
 charts
 .venv
-__pycache__
-*.pyc
-*.pyo
+# Patterns match from the context root; **/ reaches app/__pycache__ etc.
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.DS_Store
 .ruff_cache
 .pytest_cache
 *.egg-info

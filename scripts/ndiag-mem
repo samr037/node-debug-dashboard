@@ -77,18 +77,19 @@ cmd_usage() {
     printf '█%.0s' $(seq 1 $filled 2>/dev/null || echo "")
     printf "${C_DIM}"
     printf '░%.0s' $(seq 1 $empty 2>/dev/null || echo "")
-    echo -e "${C_RESET}] ${color}${pct}%%${C_RESET}"
+    echo -e "${C_RESET}] ${color}${pct}%${C_RESET}"
 }
 
 cmd_top() {
     if [ "$RAW" = "1" ]; then
         echo "### raw: ps aux sorted by memory ###"
-        ps aux --sort=-%mem | head -20
+        # || true: ps gets SIGPIPE when head exits early (141 under pipefail)
+        { ps aux --sort=-%mem || true; } | head -20
         return
     fi
     header "Top Memory Consumers"
     echo -e "${C_DIM}  PID     USER        RSS      %MEM  COMMAND${C_RESET}"
-    ps -eo pid,user,rss,%mem,comm --sort=-rss 2>/dev/null | head -16 | tail -15 | \
+    { ps -eo pid,user,rss,%mem,comm --sort=-rss 2>/dev/null || true; } | head -16 | tail -15 | \
         awk '{printf "  %-7s %-10s %6.0f MB  %5s  %s\n", $1, $2, $3/1024, $4, $5}'
 }
 
@@ -192,11 +193,14 @@ cmd_swap() {
         cat "${HOST_PROC}/swaps" 2>/dev/null | column -t | sed 's/^/  /'
         echo ""
         echo -e "${C_DIM}  Top swap consumers:${C_RESET}"
-        for pid in $(ls "${HOST_PROC}" 2>/dev/null | grep -E '^[0-9]+$' | head -100); do
-            local swap=$(awk '/^VmSwap:/{print $2}' "${HOST_PROC}/${pid}/status" 2>/dev/null || echo "0")
-            local name=$(awk '/^Name:/{print $2}' "${HOST_PROC}/${pid}/status" 2>/dev/null || echo "?")
-            [ "$swap" -gt 0 ] 2>/dev/null && echo "$swap $pid $name"
-        done | sort -rn | head -10 | awk '{printf "  PID %-7s %6.0f MB  %s\n", $2, $1/1024, $3}'
+        # Scan every PID (processes can exit mid-scan: errors ignored)
+        for status in "${HOST_PROC}"/[0-9]*/status; do
+            awk -v pid="$(basename "$(dirname "$status")")" '
+                /^Name:/   {name=$2}
+                /^VmSwap:/ {swap=$2}
+                END { if (swap > 0) print swap, pid, name }
+            ' "$status" 2>/dev/null || true
+        done | sort -rn | head -10 | awk '{printf "  PID %-7s %6.0f MB  %s\n", $2, $1/1024, $3}' || true
     fi
 }
 
@@ -210,11 +214,15 @@ cmd_oom() {
         return
     fi
     header "Recent OOM Kills"
-    local oom_count=$(dmesg 2>/dev/null | grep -c "Out of memory" || echo "0")
-    if [ "$oom_count" -gt 0 ]; then
+    # One "...out of memory: Kill(ed) process" line per kill, global ("Out of
+    # memory:") or cgroup limit ("Memory cgroup out of memory:", the usual k8s case)
+    local oom_re="out of memory: kill(ed)? process"
+    local oom_count
+    oom_count=$(dmesg 2>/dev/null | grep -ciE "$oom_re") || true
+    if [ "${oom_count:-0}" -gt 0 ]; then
         echo -e "  ${C_RED}Found ${oom_count} OOM events${C_RESET}"
         echo ""
-        dmesg 2>/dev/null | grep -A2 "Out of memory" | tail -15 | sed 's/^/  /'
+        dmesg 2>/dev/null | grep -iE -A2 "$oom_re" | tail -15 | sed 's/^/  /' || true
     else
         echo -e "  ${C_GREEN}No OOM kills detected in kernel ring buffer${C_RESET}"
     fi

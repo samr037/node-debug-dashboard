@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # The actions in .github/workflows are pinned to commit SHAs; without this
+  # nothing would ever propose moving those pins.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

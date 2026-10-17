@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.collectors.cpu import collect_cpu
 from app.collectors.gpu import collect_gpus
@@ -17,6 +17,7 @@ from app.models.hardware import (
     SensorReading,
     USBDevice,
 )
+from app.routers.degrade import gather_sections
 
 router = APIRouter(tags=["hardware"])
 
@@ -24,15 +25,22 @@ router = APIRouter(tags=["hardware"])
 @router.get("", response_model=HardwareOverview)
 async def get_hardware():
     """All hardware info aggregated."""
-    return HardwareOverview(
-        cpu=await collect_cpu(),
-        memory=await collect_memory(),
-        pci_devices=await collect_pci(),
-        usb_devices=await collect_usb(),
-        nics=await collect_nics(),
-        sensors=await collect_sensors(),
-        gpus=await collect_gpus(),
+    r, failed = await gather_sections(
+        cpu=collect_cpu(),
+        memory=collect_memory(),
+        pci_devices=collect_pci(),
+        usb_devices=collect_usb(),
+        nics=collect_nics(),
+        sensors=collect_sensors(),
+        gpus=collect_gpus(),
     )
+    # cpu and memory are required by the model; the device lists degrade to
+    # empty rather than failing the whole response.
+    if r["cpu"] is None or r["memory"] is None:
+        raise HTTPException(
+            status_code=503, detail=f"Could not collect: {', '.join(failed)}"
+        )
+    return HardwareOverview(**{k: v if v is not None else [] for k, v in r.items()})
 
 
 @router.get("/cpu", response_model=CPUInfo)

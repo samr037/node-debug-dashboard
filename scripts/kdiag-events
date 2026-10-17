@@ -16,7 +16,7 @@ cmd_node() {
     header "Events for Node ${NODE_NAME}"
 
     local events
-    events=$(k8s_api "/api/v1/events?fieldSelector=involvedObject.name=${NODE_NAME}")
+    events=$(k8s_api "/api/v1/events?fieldSelector=involvedObject.name=${NODE_NAME}") || return 0
 
     local count
     count=$(echo "$events" | jq '.items | length' 2>/dev/null)
@@ -27,7 +27,7 @@ cmd_node() {
     fi
 
     echo -e "  ${C_DIM}TIME                 TYPE     REASON              MESSAGE${C_RESET}"
-    echo "$events" | jq -r '.items | sort_by(.lastTimestamp // .eventTime) | reverse | .[:30] | .[] |
+    echo "$events" | jq -r '(.items // []) | sort_by(.lastTimestamp // .eventTime) | reverse | .[:30] | .[] |
         "\(.lastTimestamp // .eventTime // "?")\t\(.type // "Normal")\t\(.reason // "?")\t\(.message // "")"
     ' 2>/dev/null | \
     while IFS=$'\t' read -r time type reason msg; do
@@ -51,7 +51,7 @@ cmd_warnings() {
     header "Cluster-Wide Warnings"
 
     local events
-    events=$(k8s_api "/api/v1/events?fieldSelector=type=Warning")
+    events=$(k8s_api "/api/v1/events?fieldSelector=type=Warning") || return 0
 
     local count
     count=$(echo "$events" | jq '.items | length' 2>/dev/null)
@@ -63,7 +63,7 @@ cmd_warnings() {
 
     # Group by reason
     echo -e "  ${C_BOLD}By Reason:${C_RESET}"
-    echo "$events" | jq -r '[.items[] | .reason // "Unknown"] | group_by(.) | map({reason: .[0], count: length}) | sort_by(-.count) | .[:15] | .[] | "\(.reason)\t\(.count)"' 2>/dev/null | \
+    echo "$events" | jq -r '[.items[]? | .reason // "Unknown"] | group_by(.) | map({reason: .[0], count: length}) | sort_by(-.count) | .[:15] | .[] | "\(.reason)\t\(.count)"' 2>/dev/null | \
     while IFS=$'\t' read -r reason cnt; do
         local color="$C_YELLOW"
         [ "$cnt" -gt 10 ] 2>/dev/null && color="$C_RED"
@@ -73,7 +73,7 @@ cmd_warnings() {
     # Group by involved object kind
     echo ""
     echo -e "  ${C_BOLD}By Object Kind:${C_RESET}"
-    echo "$events" | jq -r '[.items[] | .involvedObject.kind // "Unknown"] | group_by(.) | map({kind: .[0], count: length}) | sort_by(-.count) | .[] | "\(.kind)\t\(.count)"' 2>/dev/null | \
+    echo "$events" | jq -r '[.items[]? | .involvedObject.kind // "Unknown"] | group_by(.) | map({kind: .[0], count: length}) | sort_by(-.count) | .[] | "\(.kind)\t\(.count)"' 2>/dev/null | \
     while IFS=$'\t' read -r kind cnt; do
         printf "    %4s  %s\n" "$cnt" "$kind"
     done
@@ -82,7 +82,7 @@ cmd_warnings() {
     echo ""
     header "Latest Warnings (last 20)"
     echo -e "  ${C_DIM}TIME                 NAMESPACE            OBJECT                     REASON              MESSAGE${C_RESET}"
-    echo "$events" | jq -r '.items | sort_by(.lastTimestamp // .eventTime) | reverse | .[:20] | .[] |
+    echo "$events" | jq -r '(.items // []) | sort_by(.lastTimestamp // .eventTime) | reverse | .[:20] | .[] |
         "\(.lastTimestamp // .eventTime // "?")\t\(.involvedObject.namespace // "-")\t\(.involvedObject.kind // "")/\(.involvedObject.name // "")\t\(.reason // "?")\t\(.message // "")"
     ' 2>/dev/null | \
     while IFS=$'\t' read -r time ns obj reason msg; do
@@ -102,10 +102,10 @@ cmd_all_events() {
     header "All Recent Events (cluster-wide)"
 
     local events
-    events=$(k8s_api "/api/v1/events")
+    events=$(k8s_api "/api/v1/events") || return 0
 
     echo -e "  ${C_DIM}TIME                 TYPE     NS                   OBJECT                     REASON${C_RESET}"
-    echo "$events" | jq -r '.items | sort_by(.lastTimestamp // .eventTime) | reverse | .[:50] | .[] |
+    echo "$events" | jq -r '(.items // []) | sort_by(.lastTimestamp // .eventTime) | reverse | .[:50] | .[] |
         "\(.lastTimestamp // .eventTime // "?")\t\(.type // "Normal")\t\(.involvedObject.namespace // "-")\t\(.involvedObject.kind // "")/\(.involvedObject.name // "")\t\(.reason // "?")"
     ' 2>/dev/null | \
     while IFS=$'\t' read -r time type ns obj reason; do
@@ -130,7 +130,7 @@ cmd_ns() {
     header "Events in Namespace: ${namespace}"
 
     local events
-    events=$(k8s_api "/api/v1/namespaces/${namespace}/events")
+    events=$(k8s_api "/api/v1/namespaces/${namespace}/events") || return 0
 
     local count
     count=$(echo "$events" | jq '.items | length' 2>/dev/null)
@@ -141,7 +141,7 @@ cmd_ns() {
     fi
 
     echo -e "  ${C_DIM}TIME                 TYPE     OBJECT                     REASON              MESSAGE${C_RESET}"
-    echo "$events" | jq -r '.items | sort_by(.lastTimestamp // .eventTime) | reverse | .[:30] | .[] |
+    echo "$events" | jq -r '(.items // []) | sort_by(.lastTimestamp // .eventTime) | reverse | .[:30] | .[] |
         "\(.lastTimestamp // .eventTime // "?")\t\(.type // "Normal")\t\(.involvedObject.kind // "")/\(.involvedObject.name // "")\t\(.reason // "?")\t\(.message // "")"
     ' 2>/dev/null | \
     while IFS=$'\t' read -r time type obj reason msg; do
@@ -161,15 +161,10 @@ cmd_watch() {
 
     # Use resourceVersion to only get new events
     local rv
-    rv=$(k8s_api "/api/v1/events?limit=1" | jq -r '.metadata.resourceVersion // ""' 2>/dev/null)
+    rv=$(k8s_api "/api/v1/events?limit=1" | jq -r '.metadata.resourceVersion // ""' 2>/dev/null) || return 0
 
-    local token
-    token=$(cat "$K8S_TOKEN_FILE" 2>/dev/null)
-
-    curl -sk --no-buffer \
-        --cacert "$K8S_CA" \
-        -H "Authorization: Bearer ${token}" \
-        "${K8S_API}/api/v1/events?watch=true&resourceVersion=${rv}" 2>/dev/null | \
+    # k8s_curl: no timeout (long-lived stream) and the token stays out of argv
+    k8s_curl "/api/v1/events?watch=true&resourceVersion=${rv}" --no-buffer | \
     while read -r line; do
         local etype obj_kind obj_name ns reason msg event_type
         etype=$(echo "$line" | jq -r '.type // "?"' 2>/dev/null)

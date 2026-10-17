@@ -1,4 +1,4 @@
-import asyncio
+import logging
 
 from fastapi import APIRouter, HTTPException
 
@@ -16,37 +16,46 @@ from app.collectors.sensors import collect_sensors
 from app.collectors.storage import collect_storage
 from app.collectors.talos import collect_talos
 from app.collectors.usb import collect_usb
+from app.routers.degrade import dump, dump_list, gather_sections
 from app.routers.warnings import get_warnings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["sections"])
 
 
 async def _collect_hardware() -> dict:
-    cpu, memory, pci, usb, nics, sensors, gpus = await asyncio.gather(
-        collect_cpu(),
-        collect_memory(),
-        collect_pci(),
-        collect_usb(),
-        collect_nics(),
-        collect_sensors(),
-        collect_gpus(),
+    # One bad collector nulls (or empties) its own field, not the section.
+    r, failed = await gather_sections(
+        cpu=collect_cpu(),
+        memory=collect_memory(),
+        pci=collect_pci(),
+        usb=collect_usb(),
+        nics=collect_nics(),
+        sensors=collect_sensors(),
+        gpus=collect_gpus(),
     )
     return {
-        "cpu": cpu.model_dump(),
-        "memory": memory.model_dump(),
-        "pci_devices": [d.model_dump() for d in pci],
-        "usb_devices": [d.model_dump() for d in usb],
-        "nics": [n.model_dump() for n in nics],
-        "sensors": [s.model_dump() for s in sensors],
-        "gpus": [g.model_dump() for g in gpus],
+        "cpu": dump(r["cpu"]),
+        "memory": dump(r["memory"]),
+        "pci_devices": dump_list(r["pci"]),
+        "usb_devices": dump_list(r["usb"]),
+        "nics": dump_list(r["nics"]),
+        "sensors": dump_list(r["sensors"]),
+        "gpus": dump_list(r["gpus"]),
+        "errors": failed,
     }
+
+
+async def _collect_system() -> dict:
+    return {"efi": (await collect_efi()).model_dump()}
 
 
 SECTION_MAP = {
     "node": lambda: collect_node_info(),
     "hardware": _collect_hardware,
     "storage": lambda: collect_storage(),
-    "system": None,  # handled below
+    "system": _collect_system,
     "network": None,  # handled below
     "kubernetes": lambda: collect_kubernetes(),
     "talos": lambda: collect_talos(),
@@ -60,27 +69,29 @@ SECTION_MAP = {
 @router.get("/{section_name}")
 async def get_section(section_name: str):
     """Fetch a single dashboard section by name."""
-    if section_name == "system":
-        efi = await collect_efi()
-        return {"efi": efi.model_dump()}
-
     if section_name == "network":
-        nics, connectivity = await asyncio.gather(
-            collect_nics(), collect_connectivity()
+        r, failed = await gather_sections(
+            nics=collect_nics(), connectivity=collect_connectivity()
         )
         return {
-            "interfaces": [n.model_dump() for n in nics],
-            "connectivity": connectivity,
+            "interfaces": dump_list(r["nics"]),
+            "connectivity": r["connectivity"],
+            "errors": failed,
         }
 
     collector = SECTION_MAP.get(section_name)
     if collector is None:
         raise HTTPException(status_code=404, detail=f"Unknown section: {section_name}")
 
-    result = await collector()
+    try:
+        result = await collector()
+    except Exception:
+        # A section is a single collector here, so there is nothing partial
+        # to return. 503 rather than an unhandled 500: the frontend already
+        # marks a failed section and keeps rendering the others.
+        logger.exception("section %r failed", section_name)
+        raise HTTPException(
+            status_code=503, detail=f"Section {section_name} could not be collected"
+        ) from None
 
-    if hasattr(result, "model_dump"):
-        return result.model_dump()
-    if isinstance(result, list):
-        return [r.model_dump() if hasattr(r, "model_dump") else r for r in result]
-    return result
+    return dump(result)

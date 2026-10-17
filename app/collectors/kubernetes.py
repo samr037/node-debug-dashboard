@@ -11,7 +11,9 @@ from app.httpclient import (
     bearer,
     etcd_client,
     insecure_client,
+    kubernetes_api_base,
     kubernetes_client,
+    local_apiserver_client,
     read_service_account_token,
 )
 from app.models.kubernetes import (
@@ -43,11 +45,13 @@ def _parse_resources(data: dict) -> K8sNodeResources:
 async def _k8s_get(path: str, params: dict | None = None) -> dict | None:
     """GET a path on the API server using the service account credentials."""
     token = await read_service_account_token()
-    if not token:
+    client = kubernetes_client()
+    # No CA, no call: the token must not go to an unverified peer.
+    if not token or client is None:
         return None
     try:
-        response = await kubernetes_client().get(
-            f"https://kubernetes.default.svc{path}",
+        response = await client.get(
+            f"{kubernetes_api_base()}{path}",
             headers=bearer(token),
             params=params,
         )
@@ -57,7 +61,9 @@ async def _k8s_get(path: str, params: dict | None = None) -> dict | None:
         return None
 
 
-@ttl_cache(seconds=60)
+# A failed API fetch returns an empty K8sNodeInfo; kubeletVersion is set on
+# every real Node, so an empty one is kept only retry_after seconds.
+@ttl_cache(seconds=60, cache_if=lambda info: bool(info.kubelet_version))
 async def collect_k8s_node_info() -> K8sNodeInfo:
     """Query the Kubernetes API for this node's info using the service account."""
     node_name = os.environ.get("KUBERNETES_NODE_NAME", "")
@@ -114,15 +120,19 @@ async def collect_k8s_node_info() -> K8sNodeInfo:
 @ttl_cache(seconds=300)
 async def collect_k8s_certificates() -> list[CertificateInfo]:
     """Scan Kubernetes PKI directories for certificates and parse their details."""
-    pki_dirs = [
-        f"{HOST_ROOT}/etc/kubernetes/pki/",
-        f"{HOST_ROOT}/etc/kubernetes/pki/etcd/",
-        f"{HOST_ROOT}/system/secrets/etcd/",
+    patterns = [
+        f"{HOST_ROOT}/etc/kubernetes/pki/*.crt",
+        f"{HOST_ROOT}/etc/kubernetes/pki/etcd/*.crt",
+        f"{HOST_ROOT}/system/secrets/etcd/*.crt",
+        # Talos keeps the Kubernetes PKI in one sub-directory per component
+        # (kube-apiserver/, kube-controller-manager/, ...); /etc/kubernetes/pki
+        # does not exist there.
+        f"{HOST_ROOT}/system/secrets/kubernetes/**/*.crt",
     ]
 
-    cert_files: list[str] = []
-    for pki_dir in pki_dirs:
-        cert_files.extend(glob.glob(f"{pki_dir}*.crt"))
+    cert_files: set[str] = set()
+    for pattern in patterns:
+        cert_files.update(glob.glob(pattern, recursive=True))
 
     certs: list[CertificateInfo] = []
     for cert_path in sorted(cert_files):
@@ -217,13 +227,23 @@ def _first_int(data: dict, *keys: str) -> int:
     return 0
 
 
+# etcd's default --quota-backend-bytes. Only etcd 3.6+ reports dbSizeQuota;
+# 3.5, which older Talos releases ship, leaves it out entirely.
+ETCD_DEFAULT_QUOTA = 2 * 1024**3
+
+
 def _parse_etcd_status(data: dict) -> EtcdStatus:
     """Build EtcdStatus from a /v3/maintenance/status response."""
     header = data.get("header", {})
 
     db_size = _first_int(data, "dbSize", "db_size")
     db_in_use = _first_int(data, "dbSizeInUse", "db_size_in_use")
+    # Without a quota, quota_pct stayed 0 and the defrag alert could never
+    # fire however close the DB got to NOSPACE. Assume the default.
     quota = _first_int(data, "dbSizeQuota", "db_size_quota")
+    quota_assumed = not quota
+    if quota_assumed:
+        quota = ETCD_DEFAULT_QUOTA
 
     mb = 1048576
     reclaimable = max(db_size - db_in_use, 0)
@@ -246,6 +266,7 @@ def _parse_etcd_status(data: dict) -> EtcdStatus:
         db_size_mb=round(db_size / mb, 1),
         db_size_in_use_mb=round(db_in_use / mb, 1),
         db_size_quota_mb=round(quota / mb, 1),
+        quota_assumed=quota_assumed,
         quota_used_percent=quota_pct,
         defrag_reclaimable_mb=round(reclaimable / mb, 1),
         defrag_severity=defrag_severity,
@@ -320,19 +341,26 @@ async def collect_k8s_components() -> list[K8sComponentStatus]:
 
     # The API server rejects anonymous requests to /healthz with a 401, so
     # an unauthenticated probe reported it permanently Unhealthy on a
-    # perfectly working control plane. The others accept the header happily.
+    # perfectly working control plane. Only the API server gets the token:
+    # kubelet and kube-proxy are plain HTTP, and with a kube-proxy replacement
+    # (Cilium on Talos) whatever binds 10249 would be handed the token.
     token = await read_service_account_token()
 
     async def probe(name: str, url: str) -> K8sComponentStatus:
-        # etcd needs client certs on Talos; the rest serve self-signed certs
-        # on localhost, so verification is off either way.
-        client = etcd_client() if name == "etcd" else insecure_client()
+        # etcd needs client certs on Talos; the API server is checked against
+        # the cluster CA since it gets the token; the rest serve self-signed
+        # certs on localhost, so verification is off for them.
+        headers: dict[str, str] = {}
+        if name == "etcd":
+            client = etcd_client()
+        elif name == "kube-apiserver" and (client := local_apiserver_client()):
+            headers = bearer(token)
+        else:
+            client = insecure_client()
         body = ""
         if client is not None:
             try:
-                response = await client.get(
-                    url, timeout=2, headers={} if name == "etcd" else bearer(token)
-                )
+                response = await client.get(url, timeout=2, headers=headers)
                 body = response.text
             except httpx.HTTPError:
                 body = ""
@@ -361,31 +389,34 @@ async def collect_k8s_components() -> list[K8sComponentStatus]:
 @ttl_cache(seconds=300)
 async def collect_k8s_api_endpoint() -> K8sApiEndpoint:
     """Check the Kubernetes API endpoint health."""
-    host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
-    port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
-
-    if not host:
+    if not os.environ.get("KUBERNETES_SERVICE_HOST", ""):
         return K8sApiEndpoint()
+    url = kubernetes_api_base()
 
     token = await read_service_account_token()
-    client = kubernetes_client() if token else insecure_client()
+    client = kubernetes_client() if token else None
+    if client is None:
+        # Without a verified channel, probe anonymously rather than hand the
+        # token to an unverified peer.
+        client, token = insecure_client(), ""
 
     healthy = False
     try:
-        response = await client.get(
-            f"https://{host}:{port}/healthz", headers=bearer(token), timeout=2
-        )
-        healthy = "ok" in response.text.lower()
+        response = await client.get(f"{url}/healthz", headers=bearer(token), timeout=2)
+        # A failing /healthz answers 500 with "[+]ping ok ... healthz check
+        # failed", so a substring match on "ok" read it as healthy.
+        healthy = response.status_code == 200 and response.text.strip().lower() == "ok"
     except httpx.HTTPError:
         healthy = False
 
     return K8sApiEndpoint(
-        url=f"https://{host}:{port}",
+        url=url,
         healthy=healthy,
     )
 
 
-@ttl_cache(seconds=60)
+# An empty list means the API call failed (this node is in the list): retry soon.
+@ttl_cache(seconds=60, cache_if=lambda nodes: bool(nodes))
 async def collect_cluster_nodes() -> list[ClusterNode]:
     """List all nodes in the cluster with name, IP, role, and readiness."""
     # resourceVersion=0 is served from the API server's watch cache, so

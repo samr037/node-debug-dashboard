@@ -1,9 +1,24 @@
 import glob
 import os
+import re
 
 from app.collectors.base import read_file, ttl_cache
 from app.config import HOST_SYS
 from app.models.hardware import SensorReading
+
+
+def _index(path: str, prefix: str) -> str:
+    """'in0_input' -> '0'. str.replace would also eat the 'in' of '_input'."""
+    m = re.match(rf"{prefix}(\d+)_input$", os.path.basename(path))
+    return m.group(1) if m else ""
+
+
+def _millis(val: str) -> float | None:
+    """Parse a sysfs milli-unit threshold, None when absent or not an integer."""
+    try:
+        return int(val) / 1000.0 if val else None
+    except ValueError:
+        return None
 
 
 @ttl_cache()
@@ -18,7 +33,7 @@ async def collect_sensors() -> list[SensorReading]:
 
         # Temperature sensors: temp*_input
         for temp_file in sorted(glob.glob(f"{hwmon_dir}/temp*_input")):
-            idx = os.path.basename(temp_file).replace("temp", "").replace("_input", "")
+            idx = _index(temp_file, "temp")
             val_str = (await read_file(temp_file)).strip()
             if not val_str:
                 continue
@@ -33,8 +48,8 @@ async def collect_sensors() -> list[SensorReading]:
             crit_str = (await read_file(f"{hwmon_dir}/temp{idx}_crit")).strip()
             warn_str = (await read_file(f"{hwmon_dir}/temp{idx}_max")).strip()
 
-            critical = int(crit_str) / 1000.0 if crit_str else None
-            warning = int(warn_str) / 1000.0 if warn_str else None
+            critical = _millis(crit_str)
+            warning = _millis(warn_str)
             is_alarm = False
             if critical and value >= critical:
                 is_alarm = True
@@ -55,7 +70,7 @@ async def collect_sensors() -> list[SensorReading]:
 
         # Fan sensors: fan*_input
         for fan_file in sorted(glob.glob(f"{hwmon_dir}/fan*_input")):
-            idx = os.path.basename(fan_file).replace("fan", "").replace("_input", "")
+            idx = _index(fan_file, "fan")
             val_str = (await read_file(fan_file)).strip()
             if not val_str:
                 continue
@@ -78,7 +93,7 @@ async def collect_sensors() -> list[SensorReading]:
 
         # Voltage sensors: in*_input
         for in_file in sorted(glob.glob(f"{hwmon_dir}/in*_input")):
-            idx = os.path.basename(in_file).replace("in", "").replace("_input", "")
+            idx = _index(in_file, "in")
             val_str = (await read_file(in_file)).strip()
             if not val_str:
                 continue
@@ -112,8 +127,9 @@ async def collect_sensors() -> list[SensorReading]:
         tz_type = (await read_file(f"{tz_dir}/type")).strip() or os.path.basename(
             tz_dir
         )
-        # Skip if we already have this from hwmon
-        if any(r.label == tz_type and r.unit == "°C" for r in readings):
+        # Skip if we already have this from hwmon: zones bridged to hwmon show
+        # up there with name == zone type and a generic 'temp1' label
+        if any(tz_type in (r.name, r.label) and r.unit == "°C" for r in readings):
             continue
 
         readings.append(
