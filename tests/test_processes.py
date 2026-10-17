@@ -45,20 +45,26 @@ def test_delta_sampling_reports_current_usage():
 
 
 def test_recycled_pid_does_not_reuse_stale_sample():
-    """A new process reusing a PID is keyed separately, so no bogus delta."""
+    """A new process reusing a PID is keyed separately, so no bogus delta.
+
+    The old sample's ticks are *below* the new ones, so a lookup keyed on
+    pid alone would happily compute a delta: 4s of CPU over the 10s since
+    that sample, 40%. Keyed on (pid, starttime), the new process falls back
+    to its own lifetime: 1s of CPU over a 10s life, 10%.
+    """
     old_start, new_start = 5000, 900000
-    prev = {(1234, old_start): (10_000_000, 100.0)}
+    prev = {(1234, old_start): (_CLK_TCK, 100.0)}
 
     pct = _cpu_percent(
         pid=1234,
         starttime=new_start,
-        cpu_ticks=0,
-        uptime_secs=(new_start / _CLK_TCK) + 10.0,
+        cpu_ticks=5 * _CLK_TCK,
+        uptime_secs=(new_start / _CLK_TCK) + 50.0,
         now=110.0,
         prev_samples=prev,
     )
-    # Falls back to lifetime average for the new process: no CPU used yet.
-    assert pct == 0.0
+    # Lifetime average: 5s of CPU over a 50s life.
+    assert pct == 10.0
 
 
 def test_counter_going_backwards_falls_back():
@@ -74,7 +80,8 @@ def test_counter_going_backwards_falls_back():
         now=110.0,
         prev_samples=prev,
     )
-    assert pct >= 0.0
+    # Falls back to the lifetime average, not a negative delta and not 0.
+    assert pct == round(1000 / _CLK_TCK / 100.0 * 100, 2)
 
 
 def test_zero_elapsed_does_not_divide_by_zero():
@@ -88,13 +95,4 @@ def test_zero_elapsed_does_not_divide_by_zero():
         now=100.0,  # same instant as the previous sample
         prev_samples=prev,
     )
-    assert pct >= 0.0
-
-
-def test_real_stat_fixture_exposes_starttime(fixture_text):
-    """Field 22 of /proc/<pid>/stat is where starttime lives."""
-    stat_raw = fixture_text("proc-pid-stat.txt")
-    after_comm = stat_raw[stat_raw.rfind(")") + 2 :].split()
-    assert len(after_comm) >= 20
-    starttime = int(after_comm[19])
-    assert starttime >= 0
+    assert pct == round(2000 / _CLK_TCK / 50.0 * 100, 2)

@@ -31,6 +31,21 @@ def _human_bytes(n: int) -> str:
     return f"{n:.1f} TB"
 
 
+def _container_uptime(c: dict) -> str:
+    """Uptime for a running container; empty for exited or created ones.
+
+    `crictl ps -a` lists exited containers too, and createdAt keeps
+    counting after they stop, so a crash three days ago read as three days
+    of uptime.
+    """
+    if c.get("state") != "CONTAINER_RUNNING":
+        return ""
+    try:
+        return _uptime_from_created(int(c.get("createdAt", 0)))
+    except (TypeError, ValueError):
+        return ""
+
+
 def _uptime_from_created(created_ns: int) -> str:
     if created_ns <= 0:
         return ""
@@ -153,7 +168,7 @@ async def collect_system_containers() -> list[SystemContainer]:
                 container_id=cid,
                 state=c.get("state", ""),
                 image=image_ref.split("@")[0] if "@" in image_ref else image_ref,
-                uptime=_uptime_from_created(created_ns),
+                uptime=_container_uptime(c),
                 created_at=str(created_ns),
                 stats=_build_stats(stats, cid),
             )
@@ -190,7 +205,7 @@ async def collect_workload_containers() -> list[WorkloadContainer]:
                 container_id=cid,
                 image=image_ref.split("@")[0] if "@" in image_ref else image_ref,
                 state=c.get("state", ""),
-                uptime=_uptime_from_created(created_ns),
+                uptime=_container_uptime(c),
                 created_at=str(created_ns),
                 stats=_build_stats(stats, cid),
             )

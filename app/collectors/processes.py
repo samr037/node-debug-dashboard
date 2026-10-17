@@ -12,6 +12,53 @@ _CLK_TCK = os.sysconf("SC_CLK_TCK")
 # Replaced wholesale on each pass, so it cannot grow past the live process count.
 _prev_samples: dict[tuple[int, int], tuple[int, float]] = {}
 
+# How many processes are returned: the heaviest by memory, plus the busiest
+# by CPU. Kernel threads and small Go binaries have next to no RSS, so a
+# memory-only cut dropped exactly the CPU hogs an operator looks for.
+_TOP_BY_MEM = 200
+_TOP_BY_CPU = 50
+
+# Secrets passed on command lines. The dashboard shows every host process,
+# so a `curl -H "Authorization: Bearer ..."` or `--token=...` must not leak.
+_REDACTED = "***"
+_SECRET_PATTERNS = (
+    # Authorization: Bearer <tok> / Authorization: Basic <tok>
+    # (only a known scheme is skipped: "Authorization: <tok> -X POST" must
+    # mask <tok>, not "-X")
+    (
+        re.compile(
+            r"(?i)(authorization:\s*"
+            r"(?:(?:bearer|basic|token|digest|negotiate|bot)\s+)?)\S+"
+        ),
+        rf"\g<1>{_REDACTED}",
+    ),
+    (re.compile(r"(?i)(\bbearer\s+)\S+"), rf"\g<1>{_REDACTED}"),
+    # --token=x, --token x, --bootstrap-token x, --password x, --client-secret x
+    # (but not --token-file /path, which is not itself secret)
+    (
+        re.compile(
+            r"(?i)(--?[\w-]*(?:token|password|passwd|secret))(?![\w-])(=|\s+)\S+"
+        ),
+        rf"\g<1>\g<2>{_REDACTED}",
+    ),
+    # password=x, token=x, access_token=x, client_secret=x as key=value
+    # (env-style args, DSNs, query strings)
+    (
+        re.compile(r"(?i)\b(\w*(?:password|passwd|pwd|token|secret)=)[^\s&;]+"),
+        rf"\g<1>{_REDACTED}",
+    ),
+    # scheme://user:pass@host
+    (re.compile(r"(://[^/\s:@]+:)[^@\s/]+@"), rf"\g<1>{_REDACTED}@"),
+)
+
+
+def _redact_command(command: str) -> str:
+    """Mask credentials in a process command line."""
+    for pattern, replacement in _SECRET_PATTERNS:
+        command = pattern.sub(replacement, command)
+    return command
+
+
 # State code to human-readable mapping
 _STATE_MAP = {
     "R": "running",
@@ -196,7 +243,7 @@ def _collect_processes_sync() -> ProcessesOverview:
             # Command line
             cmdline_raw = _read_file_sync(f"{pid_dir}/cmdline")
             if cmdline_raw:
-                command = cmdline_raw.replace("\x00", " ").strip()
+                command = _redact_command(cmdline_raw.replace("\x00", " ").strip())
             else:
                 # Fall back to comm from stat
                 paren_start = stat_raw.find("(")
@@ -226,9 +273,13 @@ def _collect_processes_sync() -> ProcessesOverview:
 
     _prev_samples = samples
 
-    # Sort by memory percent descending, limit to top 200
+    # Top by memory, plus the top CPU consumers that cut would have dropped.
+    # Still ordered by memory, as the table has always been.
+    by_cpu = sorted(processes, key=lambda p: p.cpu_percent, reverse=True)
     processes.sort(key=lambda p: p.mem_percent, reverse=True)
-    top_processes = processes[:200]
+    top_processes = processes[:_TOP_BY_MEM]
+    kept = {p.pid for p in top_processes}
+    top_processes.extend(p for p in by_cpu[:_TOP_BY_CPU] if p.pid not in kept)
 
     return ProcessesOverview(
         total_count=len(processes),
