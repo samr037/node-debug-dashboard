@@ -80,6 +80,14 @@
   #ssh h2 { position:absolute; left:0; right:0; top:580px; margin:0; text-align:center; font-size:28px; font-weight:600; color:var(--dim); opacity:0; }
   #ssh h2 b { color:var(--bright); }
 
+  /* 4b. API */
+  #api .term { left:150px; top:90px; width:980px; height:440px; }
+  #api .line { opacity:0; }
+  #api .hl { display:inline-block; border-radius:4px; padding:0 4px; margin:0 -4px; }
+  .k { color:var(--blue); } .s { color:#a5d6ff; } .n { color:#ffa657; } .f { color:var(--red); }
+  #api h2 { position:absolute; left:0; right:0; top:580px; margin:0; text-align:center; font-size:28px; font-weight:600; color:var(--dim); opacity:0; }
+  #api h2 b { color:var(--bright); } #api h2 code { font-family:"JetBrains Mono", monospace; color:var(--cyan); font-size:25px; }
+
   /* 5. Features */
   #features h3 { position:absolute; top:88px; left:0; right:0; text-align:center; margin:0; font-size:40px; font-weight:800; letter-spacing:-1px; color:var(--bright); }
   #features .grid { position:absolute; left:90px; right:90px; top:185px; display:grid; grid-template-columns:repeat(3, 1fr); gap:22px; }
@@ -99,7 +107,7 @@
 </style>
 </head>
 <body>
-<div id="root" data-composition-id="main" data-start="0" data-duration="23" data-width="1280" data-height="720">
+<div id="root" data-composition-id="main" data-start="0" data-duration="27" data-width="1280" data-height="720">
 
   <section id="title" class="clip center" data-start="0" data-duration="3" data-track-index="1">
     <div class="stack">
@@ -174,7 +182,25 @@
     <h2 id="s-h">Opt-in SSH shell with <b>smartctl, ethtool, tcpdump</b> and 11 diag scripts</h2>
   </section>
 
-  <section id="features" class="clip" data-start="17.8" data-duration="2.8" data-track-index="1">
+  <section id="api" class="clip" data-start="17.8" data-duration="4" data-track-index="1">
+    <div class="term" id="a-term">
+      <div class="bar"><div class="dot" style="background:#ff5f57"></div><div class="dot" style="background:#febc2e"></div><div class="dot" style="background:#28c840"></div><span class="t">~ — zsh</span></div>
+<pre><span class="line"><span class="p">$</span> curl -s -u debug:•••• http://cp-01/api/sections/storage | jq '.smart[1]'</span>
+<span class="line">{</span>
+<span class="line">  <span class="k">"device"</span>: <span class="s">"/dev/nvme1n1"</span>,</span>
+<span class="line">  <span class="k">"model"</span>: <span class="s">"WD Blue SN570 1TB"</span>,</span>
+<span class="line">  <span class="k">"health_passed"</span>: <span class="f">false</span>,</span>
+<span class="line">  <span class="k">"temperature_celsius"</span>: <span class="n">52</span>,</span>
+<span class="line">  <span class="k">"wear_leveling_percent"</span>: <span class="n">71</span>,</span>
+<span class="line"><span class="hl" id="a-hl">  <span class="k">"pending_sectors"</span>: <span class="n">24</span>,</span></span>
+<span class="line">  <span class="k">"offline_uncorrectable"</span>: <span class="n">3</span>,</span>
+<span class="line">  <span class="k">"smart_issues"</span>: [<span class="s">"self-test failed: read failure"</span>]</span>
+<span class="line">}</span></pre>
+    </div>
+    <h2 id="a-h">Every section as JSON under <code>/api</code>, Swagger at <code>/docs</code></h2>
+  </section>
+
+  <section id="features" class="clip" data-start="21.8" data-duration="2.8" data-track-index="1">
     <h3 id="f-title">No system extension. No node reboot.</h3>
     <div class="grid">
       <div class="card"><div class="k">Hardware</div><h2>SMART &amp; sensors</h2><p>Disks, NVMe wear, pending sectors, temps, DIMMs, PCI, GPUs.</p></div>
@@ -186,7 +212,7 @@
     </div>
   </section>
 
-  <section id="outro" class="clip center" data-start="20.6" data-duration="2.4" data-track-index="1">
+  <section id="outro" class="clip center" data-start="24.6" data-duration="2.4" data-track-index="1">
     <div class="stack">
       <img src="talos-logo.svg" alt="" />
       <h1>Node Debug Dashboard</h1>
@@ -240,14 +266,22 @@
   tl.fromTo("#s-h", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: .45, ease: "power3.out" }, S + 2.3);
   tl.to(["#s-term", "#s-h"], { opacity: 0, y: -20, duration: .35, ease: "power2.in" }, S + 4.0);
 
+  // 4b. API
+  const A = 17.8;
+  tl.fromTo("#a-term", { y: 40, opacity: 0 }, { y: 0, opacity: 1, duration: .5, ease: "power3.out" }, A);
+  tl.to("#api .line", { opacity: 1, duration: .1, stagger: .12 }, A + .45);
+  tl.to("#a-hl", { backgroundColor: "rgba(248,81,73,.22)", duration: .3 }, A + 2.0);
+  tl.fromTo("#a-h", { y: 16, opacity: 0 }, { y: 0, opacity: 1, duration: .45, ease: "power3.out" }, A + 2.2);
+  tl.to(["#a-term", "#a-h"], { opacity: 0, y: -20, duration: .35, ease: "power2.in" }, A + 3.6);
+
   // 5. Features
-  const F = 17.8;
+  const F = 21.8;
   tl.fromTo("#f-title", { y: 20, opacity: 0 }, { y: 0, opacity: 1, duration: .45, ease: "power3.out" }, F + .05);
   tl.fromTo("#features .card", { y: 40, opacity: 0 }, { y: 0, opacity: 1, duration: .5, ease: "power3.out", stagger: .08 }, F + .25);
   tl.to(["#features .grid", "#f-title"], { opacity: 0, duration: .3 }, F + 2.5);
 
   // 6. Outro
-  tl.fromTo("#outro .stack > *", { y: 24, opacity: 0 }, { y: 0, opacity: 1, duration: .5, ease: "power3.out", stagger: .1 }, 20.7);
+  tl.fromTo("#outro .stack > *", { y: 24, opacity: 0 }, { y: 0, opacity: 1, duration: .5, ease: "power3.out", stagger: .1 }, 24.7);
 
   window.__timelines = window.__timelines || {};
   window.__timelines.main = tl;
